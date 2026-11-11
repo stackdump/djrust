@@ -1,0 +1,537 @@
+{
+ "schema": "djrust/map/v1",
+ "device": "MPK Mini Mk II",
+ "active": "performance",
+ "presets": [
+  {
+   "name": "performance",
+   "bindings": [
+    {
+     "group": "keys",
+     "action": "keys"
+    },
+    {
+     "group": "knobs",
+     "index": 1,
+     "action": "volume",
+     "deck": "L"
+    },
+    {
+     "group": "knobs",
+     "index": 2,
+     "action": "filter",
+     "deck": "L"
+    },
+    {
+     "group": "padNotes",
+     "index": 0,
+     "action": "clipToggle",
+     "slot": 0
+    },
+    {
+     "group": "padNotes",
+     "index": 1,
+     "action": "clipToggle",
+     "slot": 1
+    },
+    {
+     "group": "padNotes",
+     "index": 2,
+     "action": "clipToggle",
+     "slot": 2
+    },
+    {
+     "group": "padNotes",
+     "index": 3,
+     "action": "clipToggle",
+     "slot": 3
+    },
+    {
+     "group": "padNotes",
+     "index": 4,
+     "action": "clipToggle",
+     "slot": 4
+    },
+    {
+     "group": "padNotes",
+     "index": 5,
+     "action": "clipToggle",
+     "slot": 5
+    },
+    {
+     "group": "padNotes",
+     "index": 6,
+     "action": "clipToggle",
+     "slot": 6
+    },
+    {
+     "group": "padNotes",
+     "index": 7,
+     "action": "clipToggle",
+     "slot": 7
+    },
+    {
+     "group": "padNotes",
+     "index": 8,
+     "action": "roleMute",
+     "deck": "*",
+     "role": "kick"
+    },
+    {
+     "group": "padNotes",
+     "index": 9,
+     "action": "roleMute",
+     "deck": "*",
+     "role": "snare"
+    },
+    {
+     "group": "padNotes",
+     "index": 10,
+     "action": "roleMute",
+     "deck": "*",
+     "role": "hihat"
+    },
+    {
+     "group": "padNotes",
+     "index": 11,
+     "action": "roleMute",
+     "deck": "*",
+     "role": "clap"
+    },
+    {
+     "group": "padNotes",
+     "index": 12,
+     "action": "roleMute",
+     "deck": "*",
+     "role": "bass"
+    },
+    {
+     "group": "padNotes",
+     "index": 13,
+     "action": "roleMute",
+     "deck": "*",
+     "role": "melody"
+    },
+    {
+     "group": "padNotes",
+     "index": 14,
+     "action": "roleMute",
+     "deck": "*",
+     "role": "harmony"
+    },
+    {
+     "group": "padNotes",
+     "index": 15,
+     "action": "roleMute",
+     "deck": "*",
+     "role": "arp"
+    }
+   ]
+  },
+  {
+   "name": "vocoder",
+   "bindings": [
+    {
+     "group": "keys",
+     "action": "vocoderKeys",
+     "args": {
+      "transpose": "0"
+     }
+    },
+    {
+     "group": "knobs",
+     "index": 1,
+     "action": "vocoder",
+     "args": {
+      "param": "shift"
+     }
+    },
+    {
+     "group": "knobs",
+     "index": 2,
+     "action": "vocoder",
+     "args": {
+      "param": "bands"
+     }
+    },
+    {
+     "group": "knobs",
+     "index": 4,
+     "action": "vocoder",
+     "args": {
+      "param": "attack"
+     }
+    },
+    {
+     "group": "knobs",
+     "index": 5,
+     "action": "vocoder",
+     "args": {
+      "param": "release"
+     }
+    },
+    {
+     "group": "knobs",
+     "index": 6,
+     "action": "vocoder",
+     "args": {
+      "param": "mix"
+     }
+    },
+    {
+     "group": "knobs",
+     "index": 7,
+     "action": "vocoder",
+     "args": {
+      "param": "cutoff"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 0,
+     "action": "vocoderSwitch",
+     "args": {
+      "op": "freeze"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 1,
+     "action": "vocoderSwitch",
+     "args": {
+      "op": "swap"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 2,
+     "action": "vocoderSwitch",
+     "args": {
+      "op": "xfade"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 3,
+     "action": "vocoderSwitch",
+     "args": {
+      "op": "bypass"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 4,
+     "action": "vocoderSwitch",
+     "args": {
+      "op": "modulator"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 5,
+     "action": "vocoderSwitch",
+     "args": {
+      "op": "carrier"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 6,
+     "action": "vocoderSwitch",
+     "args": {
+      "op": "preset_next"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 7,
+     "action": "vocoderSwitch",
+     "args": {
+      "op": "on"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 8,
+     "action": "vocoderSwitch",
+     "args": {
+      "op": "select_next"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 9,
+     "action": "vocoderSwitch",
+     "args": {
+      "op": "select_prev"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 10,
+     "action": "vocoderSwitch",
+     "args": {
+      "op": "add"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 11,
+     "action": "vocoderSwitch",
+     "args": {
+      "op": "remove"
+     }
+    }
+   ]
+  },
+  {
+   "name": "vocals",
+   "bindings": [
+    {
+     "group": "padNotes",
+     "index": 0,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:0",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 1,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:1",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 2,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:2",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 3,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:3",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 4,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:4",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 5,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:5",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 6,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:6",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 7,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:7",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 8,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:8",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 9,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:9",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 10,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:10",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 11,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:11",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 12,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:12",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 13,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:13",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 14,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:14",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "padNotes",
+     "index": 15,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:15",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "pads",
+     "index": 0,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:0",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "pads",
+     "index": 1,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:1",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "pads",
+     "index": 2,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:2",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "pads",
+     "index": 3,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:3",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "pads",
+     "index": 4,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:4",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "pads",
+     "index": 5,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:5",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "pads",
+     "index": 6,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:6",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    },
+    {
+     "group": "pads",
+     "index": 7,
+     "action": "oneShot",
+     "args": {
+      "sample": "vox:7",
+      "quant": "beat",
+      "choke": "vox"
+     }
+    }
+   ]
+  },
+  {
+   "name": "decks",
+   "bindings": []
+  }
+ ]
+}

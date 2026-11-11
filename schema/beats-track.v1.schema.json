@@ -1,0 +1,774 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://beats.bitwrap.io/schema/beats-track.v1.schema.json",
+  "title": "BeatsTrack",
+  "description": "Payload of a signed beats.bitwrap.io track share. Ported from beats-share.schema.json (internal/share in stackdump/beats-bitwrap-io): identical fields, except that `source`, `signer` and `signature` are removed because provenance and signature now live in the Verifiable Credential whose credentialSubject this payload is (issuer, validFrom, the Data Integrity proof), not inside the payload. The payload CID (dataCID) is sha2-256 of its JCS bytes, the same CIDv1/dag-json base58btc form beats uses.",
+  "type": "object",
+  "required": [
+    "@type",
+    "v",
+    "genre",
+    "seed"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "@context": {
+      "description": "JSON-LD context URL. Canonical value is the hosted context document.",
+      "type": "string",
+      "format": "uri"
+    },
+    "@type": {
+      "const": "BeatsShare"
+    },
+    "v": {
+      "const": 1
+    },
+    "genre": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "name": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 128
+    },
+    "seed": {
+      "type": "integer"
+    },
+    "tempo": {
+      "type": "integer",
+      "minimum": 20,
+      "maximum": 300
+    },
+    "swing": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "humanize": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "rootNote": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 127
+    },
+    "scaleName": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 32
+    },
+    "bars": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 4096
+    },
+    "structure": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 32
+    },
+    "cohesion": {
+      "description": "Generator pipeline version. 'v1' = legacy per-role independent generation (kick, snare, hihat, bass, melody composed independently). 'v2' = cohesion pipeline: TrackTheme (chord plan, phrase-grammar motif, groove template, energy curve) built first; chord pad voices the progression; bass rhythm locks to the kick mask and walks the chord roots; section content varies via SectionProfile; Feel puck auto-snaps per section. ABSENT in a sealed envelope = v1 — the boot path pins legacy so pre-cohesion ?cid= links keep their original sound. Fresh generates DEFAULT to v2 (for supported genres) and stamp the field explicitly; override per request with params.cohesion='v1' or server-wide with BEATS_COHESION_DEFAULT=v1. Existing CIDs (no field set) canonicalize byte-identically.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        null,
+        "v1",
+        "v2"
+      ]
+    },
+    "note": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 280,
+      "description": "Optional plain-text annotation set by the author. Heavily filtered server-side (see SanitizeNote in internal/share/note.go) — no HTML tags, no URLs, no control chars, no zero-width / RTL-override Unicode. Influences the CID."
+    },
+    "parents": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "maxItems": 8,
+      "description": "Provenance chain — CIDs of shares this one was derived from (typically the prior CID when the user opened a share, edited it, and re-shared). Newest-first ordering; cap at 8 keeps envelopes small.",
+      "items": {
+        "type": "string",
+        "pattern": "^z[1-9A-HJ-NP-Za-km-z]{1,128}$"
+      }
+    },
+    "arrangeSeed": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 2147483647
+    },
+    "velocityDeltas": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Per-variant velocity offsets keyed by riff letter (A/B/C). Defaults to {A:0, B:15, C:-15}.",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": -127,
+        "maximum": 127
+      }
+    },
+    "maxVariants": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "maximum": 8,
+      "description": "Cap on distinct riff variants per role. 0/absent = blueprint-driven."
+    },
+    "fadeIn": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string",
+        "maxLength": 64
+      },
+      "maxItems": 32,
+      "description": "Roles that start muted and unmute mid-intro."
+    },
+    "drumBreak": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 64,
+      "description": "Bars of drum-only break injected at track midpoint. 0 = disabled."
+    },
+    "sections": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Author-supplied section blueprint. When set, overrides the built-in blueprints.",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "steps"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "steps": {
+            "type": "integer",
+            "minimum": 16,
+            "maximum": 4096
+          },
+          "active": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "maxItems": 32
+          }
+        }
+      }
+    },
+    "feelCurve": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Snap the Feel XY puck at the start of named sections. Each entry: {section, x in [0,1], y in [0,1]}.",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "section",
+          "x",
+          "y"
+        ],
+        "properties": {
+          "section": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "x": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    },
+    "macroCurve": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Schedule fire-macro events at section starts. Each entry: {section, macro id from catalog, bars duration}.",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "section",
+          "macro"
+        ],
+        "properties": {
+          "section": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "macro": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "bars": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1024
+          }
+        }
+      }
+    },
+    "counterMelody": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Inject a generated counter-melody music net that plays during named sections. First arrange directive that synthesizes a music net (not just a control net). Each entry: {section, mode answer|harmony|shadow, density 0..1, register above|below, optional source net ID, optional instrument key}.",
+      "maxItems": 8,
+      "items": {
+        "$ref": "#/$defs/CounterMelodyEntry"
+      }
+    },
+    "traits": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "tracks": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/TrackOverride"
+      }
+    },
+    "fx": {
+      "$ref": "#/$defs/FxState"
+    },
+    "feel": {
+      "$ref": "#/$defs/FeelState"
+    },
+    "autoDj": {
+      "$ref": "#/$defs/AutoDjState"
+    },
+    "macrosDisabled": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "initialMutes": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": [
+          "string",
+          "integer"
+        ]
+      }
+    },
+    "hits": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/HitOverride"
+      }
+    },
+    "ui": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "playbackMode": {
+          "type": "string",
+          "enum": [
+            "single",
+            "repeat",
+            "shuffle"
+          ]
+        },
+        "showFx": {
+          "type": "boolean"
+        },
+        "showMacros": {
+          "type": "boolean"
+        },
+        "showOneShots": {
+          "type": "boolean"
+        }
+      }
+    },
+    "loop": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "startTick": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "endTick": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "nets": {
+      "description": "Optional full petri-net bundle. When present, the share boot path loads these nets directly and SKIPS the generator — used to round-trip hand-authored or heavily-edited projects that can't be recreated from (genre, seed) alone. Keys are net IDs; values are the same shape emitted by /api/project (track, places, transitions, arcs, role, riffGroup).",
+      "type": [
+        "object",
+        "null"
+      ],
+      "maxProperties": 256,
+      "propertyNames": {
+        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/Net"
+      }
+    }
+  },
+  "$defs": {
+    "CounterMelodyEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "section"
+      ],
+      "properties": {
+        "section": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "answer",
+            "harmony",
+            "shadow"
+          ]
+        },
+        "density": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "register": {
+          "type": "string",
+          "enum": [
+            "above",
+            "below"
+          ]
+        },
+        "of": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "instrument": {
+          "type": "string",
+          "maxLength": 64
+        }
+      }
+    },
+    "TrackOverride": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "mix": {
+          "type": "object"
+        },
+        "instrument": {
+          "type": "string"
+        },
+        "instrumentSet": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "FxState": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "_bypassed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "FeelState": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "engaged": {
+          "type": "boolean"
+        },
+        "sliders": {
+          "type": "object"
+        }
+      }
+    },
+    "AutoDjState": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "run": {
+          "type": "boolean"
+        },
+        "animateOnly": {
+          "type": "boolean",
+          "deprecated": true,
+          "description": "Deprecated as of v2.4 — accepted but ignored. Was a UI-only toggle that spun the Auto-DJ ring without firing macros; left in schema so old sealed CIDs validate."
+        },
+        "rate": {
+          "type": "integer"
+        },
+        "regen": {
+          "type": "integer"
+        },
+        "stack": {
+          "type": "integer"
+        },
+        "showAutoDj": {
+          "type": "boolean"
+        },
+        "pools": {
+          "type": "object"
+        }
+      }
+    },
+    "HitOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bars": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "pitch": {
+          "type": "integer",
+          "minimum": -24,
+          "maximum": 24
+        },
+        "pair": {
+          "type": "string",
+          "maxLength": 64
+        }
+      }
+    },
+    "Net": {
+      "description": "One entry inside the top-level `nets` map. Values are capped to keep pathological payloads from bogging the worker or the DOM; the 256 kB outer payload cap is the hard ceiling but these per-net caps provide defense-in-depth.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "enum": [
+            "music",
+            "control"
+          ]
+        },
+        "riffGroup": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "riffVariant": {
+          "type": "string",
+          "maxLength": 16
+        },
+        "track": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "channel": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 32
+            },
+            "defaultVelocity": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 127
+            },
+            "instrument": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "instrumentSet": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "type": "string",
+                "maxLength": 64
+              }
+            },
+            "group": {
+              "type": "string",
+              "maxLength": 32,
+              "description": "Mixer-section group (drums/bass/chords/harmony/lead/melody/arp/pad/stinger or freeform). Controls how rows section up in the UI."
+            }
+          }
+        },
+        "places": {
+          "type": "object",
+          "maxProperties": 2048,
+          "propertyNames": {
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "initial": {
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    },
+                    "maxItems": 8
+                  }
+                ]
+              },
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 64
+              }
+            }
+          }
+        },
+        "transitions": {
+          "type": "object",
+          "maxProperties": 2048,
+          "propertyNames": {
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "midi": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "note": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 127
+                  },
+                  "channel": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 32
+                  },
+                  "velocity": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 127
+                  },
+                  "duration": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 60000
+                  },
+                  "durationSteps": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 4096
+                  }
+                }
+              },
+              "control": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "enum": [
+                      "mute-track",
+                      "unmute-track",
+                      "toggle-track",
+                      "mute-note",
+                      "unmute-note",
+                      "toggle-note",
+                      "activate-slot",
+                      "stop-transport",
+                      "fire-macro",
+                      "set-feel",
+                      "set-visualizer"
+                    ]
+                  },
+                  "targetNet": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "targetNote": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 127
+                  },
+                  "macro": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "macroBars": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1024
+                  },
+                  "macroParams": {
+                    "type": "object",
+                    "maxProperties": 32,
+                    "additionalProperties": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "arcs": {
+          "type": "array",
+          "maxItems": 8192,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "source": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "target": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "weight": {
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    },
+                    "maxItems": 8
+                  }
+                ]
+              },
+              "inhibit": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "x-credential": {
+    "standard": "W3C Verifiable Credentials Data Model 2.0; this schema constrains credentialSubject",
+    "credentialSchema": {
+      "id": "https://beats.bitwrap.io/schema/beats-track.v1.schema.json",
+      "type": "JsonSchema"
+    },
+    "type": [
+      "VerifiableCredential",
+      "BitwrapCredential"
+    ],
+    "issuer": "the sharer's did:pkh",
+    "proof": {
+      "type": "DataIntegrityProof",
+      "cryptosuite": "bitwrap-eip712-jcs-2026",
+      "proofPurpose": "assertionMethod"
+    },
+    "canonicalization": "RFC 8785 (JCS)",
+    "cid": "CIDv1 dag-json sha2-256, base58btc, multibase z, of the whole credential (proof included)",
+    "legacyBeatsShare": "signer.type=eth personal_sign (EIP-191) over the pre-signature CID string; verified by internal/share/sigverify.go"
+  }
+}

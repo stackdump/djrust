@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bitwrap.io/schema/bitwrap-session.v1.schema.json",
+  "title": "BitwrapSession",
+  "description": "A djrust recorded session (session.json of a djrust SessionBundle), signed by a member so it can be published to the bitwrap storage service. The credentialSubject is the session document itself, so its CID is the session's CID and it is served at <publish base><that CID>/session.json. Its full shape is djrust's; the service checks only the members below.",
+  "type": "object",
+  "required": ["schema", "sampleRate", "frames", "decks", "events"],
+  "properties": {
+    "schema": {"type": "string", "pattern": "/session/v1$"},
+    "sampleRate": {"type": "number"},
+    "frames": {"type": "integer"},
+    "decks": {"type": "object"},
+    "events": {"type": "array"}
+  }
+}

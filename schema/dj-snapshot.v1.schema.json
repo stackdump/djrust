@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://beats.bitwrap.io/schema/dj-snapshot.v1.schema.json",
+  "title": "DjSnapshot",
+  "description": "The whole DJ session at one moment, as data: what each deck holds (a beats track share, inline, with its share CID), where it is and whether it plays, every deck's knobs and FX unit, the mixer, and the moves that set up what no deck knob holds (input strips, aux bus, post bus, each vocoder instance with its sources, knobs, notes and switches). Its CID (RFC 8785 JCS bytes -> sha2-256 -> CIDv1 dag-json -> base58btc, multibase z: the beats share CID) names exactly this state; loading the document on a fresh engine puts the engine back in it. The shapes inside are djrust's own (djrust::session::model DeckSource / DeckParams, djrust::session::arrangement live ops), so djapp, djandroid and djweb read the same snapshot. A snapshot is unsigned data. When provenance is wanted, a W3C Verifiable Credential under bitwrap-snapshot-share.v1 (djrust-wallet) names it by this CID, as credentialSubject.id = ipfs://<cid>; the snapshot is never itself a credential's subject.",
+  "type": "object",
+  "required": ["@context", "@type", "v", "decks", "mixer", "setup"],
+  "additionalProperties": false,
+  "properties": {
+    "@context": { "const": "https://beats.bitwrap.io/schema/beats-share.context.jsonld" },
+    "@type": { "const": "DjSnapshot" },
+    "v": { "const": 1 },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "description": "Optional human label. Part of the content: two snapshots that differ only in title have different CIDs."
+    },
+    "decks": {
+      "type": "object",
+      "description": "Every deck the engine has, by name. A deck with nothing loaded has source {kind: none}.",
+      "propertyNames": { "pattern": "^[A-D]$" },
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/deck" }
+    },
+    "mixer": {
+      "type": "object",
+      "required": ["crossfader", "master"],
+      "additionalProperties": false,
+      "properties": {
+        "crossfader": { "$ref": "#/$defs/unit" },
+        "master": { "type": "number", "minimum": 0, "maximum": 2 },
+        "loopGain": { "type": "number", "minimum": 0, "maximum": 2, "description": "The loop channel's trim; absent = engine default." }
+      }
+    },
+    "setup": {
+      "type": "object",
+      "description": "Live ops replayed in this order after the decks and mixer are set: inputs, aux, post, vocoders (the order djhost Engine::arrange_start writes them). Each op is djrust's live-op JSON: {op, ...socket params}. Empty groups are written as [].",
+      "required": ["inputs", "aux", "post", "vocoders"],
+      "additionalProperties": false,
+      "properties": {
+        "inputs": { "type": "array", "items": { "$ref": "#/$defs/liveOp", "properties": { "op": { "const": "input" } } } },
+        "aux": { "type": "array", "items": { "$ref": "#/$defs/liveOp", "properties": { "op": { "const": "aux" } } } },
+        "post": { "type": "array", "items": { "$ref": "#/$defs/liveOp", "properties": { "op": { "const": "post" } } } },
+        "vocoders": {
+          "type": "array",
+          "maxItems": 8,
+          "description": "One op per vocoder instance in use (djhost Engine::vocoder_setup_ops): carrier, modulator, every knob that differs from a fresh instance, held synth notes, then switches. Instance 0 carries no instance member; any other carries {instance: k}.",
+          "items": {
+            "$ref": "#/$defs/liveOp",
+            "properties": {
+              "op": { "const": "vocoder" },
+              "instance": { "type": "integer", "minimum": 1, "maximum": 7 },
+              "carrier": { "type": "string" },
+              "modulator": { "type": "string" },
+              "notes": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 127 } }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "unit": { "type": "number", "minimum": 0, "maximum": 1 },
+    "cid": { "type": "string", "pattern": "^z[1-9A-HJ-NP-Za-km-z]{40,128}$" },
+    "deck": {
+      "type": "object",
+      "required": ["source", "params", "playing"],
+      "additionalProperties": false,
+      "properties": {
+        "source": { "$ref": "#/$defs/source" },
+        "params": { "$ref": "#/$defs/params" },
+        "playing": { "type": "boolean" },
+        "position": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Where the deck is: the net tick (a net deck, 16 per bar) or the sample frame (a sample deck). Absent: from the top."
+        }
+      }
+    },
+    "source": {
+      "description": "djrust DeckSource JSON. A net source carries the whole beats share payload inline, so a snapshot restores with no network; cid is the share's own CID (what beats names the track by) and must equal shareCID(share).",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": { "kind": { "const": "none" } }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "share", "cid"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "net" },
+            "share": { "type": "object", "description": "beats share payload (TrackSpec::payload): genre, seed, structure, ..." },
+            "cid": { "$ref": "#/$defs/cid" },
+            "partSeeds": { "type": "object" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "share", "cid"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "rawNets" },
+            "share": { "type": "object", "description": "a raw-nets beats share payload, as given" },
+            "cid": { "$ref": "#/$defs/cid" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "id", "title"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "sample" },
+            "id": { "type": "string", "description": "content id of the decoded audio (sha256 hex) or demo-loop; the audio itself is not in the snapshot" },
+            "title": { "type": "string" },
+            "grid": {
+              "type": "object",
+              "required": ["bpm"],
+              "additionalProperties": false,
+              "properties": { "bpm": { "type": "number" }, "offset": { "type": "number" } }
+            }
+          }
+        }
+      ]
+    },
+    "params": {
+      "description": "djrust DeckParams JSON: the strip (volume, gain, filter, EQ, pitch), quantize, auto-advance, and, only when not neutral, reverb, disabled roles, the walk and the FX unit.",
+      "type": "object",
+      "required": ["volume", "gain", "filter", "eqLow", "eqMid", "eqHigh", "pitch", "quantize", "autoAdvance"],
+      "additionalProperties": false,
+      "properties": {
+        "volume": { "type": "number" },
+        "gain": { "type": "number" },
+        "filter": { "type": "number" },
+        "eqLow": { "type": "number" },
+        "eqMid": { "type": "number" },
+        "eqHigh": { "type": "number" },
+        "pitch": { "type": "number" },
+        "quantize": { "type": "string" },
+        "autoAdvance": { "type": "boolean" },
+        "autoGain": { "const": true },
+        "disabledRoles": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "wander": { "type": "object" },
+        "fxUnit": { "type": "object" },
+        "reverbWet": { "type": "number" },
+        "reverbSize": { "type": "number" },
+        "reverbTone": { "type": "number" }
+      }
+    },
+    "liveOp": {
+      "type": "object",
+      "required": ["op"],
+      "properties": { "op": { "type": "string" } }
+    }
+  },
+  "x-cid": "CIDv1 dag-json (0xa9 0x02) sha2-256, base58btc, multibase z, over RFC 8785 JCS bytes (djrust cid::share_cid, wallet Cid.ofJson, beats computeCidForJsonLd)",
+  "x-signing": {
+    "optional": true,
+    "standard": "W3C Verifiable Credentials Data Model 2.0",
+    "credential": "by reference: a bitwrap-snapshot-share.v1 credential whose credentialSubject.id is ipfs://<this document's CID>, proof DataIntegrityProof with cryptosuite bitwrap-eip712-jcs-2026 (djrust-wallet, docs/STANDARDS.md)"
+  },
+  "x-privacy": "No host file paths: input strips' recording files, sample file paths and the capture-library directory that djrust's ArrangeStart carries are left out. Sample decks name their audio by content id only."
+}

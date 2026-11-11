@@ -1,0 +1,85 @@
+{
+ "name": "Lekato PD705 (DrumPad)",
+ "manufacturer": "Lekato",
+ "match": "drumpad",
+ "source": "The factory note map of pd705-rs pd705-midi DEFAULT_MAP (FORMAT.md section 4), channel 10, the same table as djengine::gear::PD705_NOTES. The pad's USB name is DrumPad (VID 35ba, PID 1101). Written 2026-11-07 for the binding map. Nothing is bound by default: the hub plays this pad, and a hit by hand should not start a deck until you say so.",
+ "groups": [
+  {
+   "id": "pads",
+   "type": "note",
+   "channel": 9,
+   "numbers": [
+    49,
+    57,
+    51,
+    48,
+    45,
+    43,
+    36,
+    38,
+    42
+   ],
+   "names": [
+    "pad 1 crash",
+    "pad 2 crash 2",
+    "pad 3 ride",
+    "pad 4 tom hi-mid",
+    "pad 5 tom low",
+    "pad 6 floor tom",
+    "pad 7 kick",
+    "pad 8 snare",
+    "pad 9 hat"
+   ],
+   "comment": "Pad 1-9 (3x3), the factory kit's note numbers"
+  },
+  {
+   "id": "triggers",
+   "type": "note",
+   "channel": 9,
+   "numbers": [
+    22,
+    24,
+    41,
+    39
+   ],
+   "names": [
+    "trigger 1",
+    "trigger 2",
+    "trigger 3",
+    "trigger 4"
+   ],
+   "comment": "the four trigger inputs on the back"
+  },
+  {
+   "id": "feet",
+   "type": "note",
+   "channel": 9,
+   "numbers": [
+    44,
+    35
+   ],
+   "names": [
+    "foot 1 hat pedal",
+    "foot 2 kick"
+   ],
+   "comment": "the two foot inputs (hat pedal, kick pedal)"
+  }
+ ],
+ "layout": [
+  {
+   "group": "pads",
+   "action": "unbound",
+   "reason": "free: bind a pad to any target in the Bindings window; the hub plays this pad, so a hit by hand starts nothing until you say so"
+  },
+  {
+   "group": "triggers",
+   "action": "unbound",
+   "reason": "free: bind a trigger input to any target"
+  },
+  {
+   "group": "feet",
+   "action": "unbound",
+   "reason": "free: bind a foot input to any target"
+  }
+ ]
+}

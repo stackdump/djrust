@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bitwrap.io/schema/bitwrap-invite-accept.v1.schema.json",
+  "title": "BitwrapInviteAccept",
+  "description": "The redeemer's half of a membership: the issuer (the new member) accepts one bearer invite (bitwrap-invite.v1), named by the CID of its credential. The pair (invite, accept) is a membership; a chain of pairs back to the root identity proves it. The service accepts each invite code once; until a service exists, an accept is a signed statement the member keeps and can send to the inviter.",
+  "type": "object",
+  "required": [
+    "@type",
+    "v",
+    "invite",
+    "inviter",
+    "member"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "@type": {
+      "const": "BitwrapInviteAccept"
+    },
+    "v": {
+      "const": 1
+    },
+    "invite": {
+      "type": "string",
+      "pattern": "^z[1-9A-HJ-NP-Za-km-z]{40,128}$",
+      "description": "CID of the accepted invite's credential (proof included)."
+    },
+    "inviter": {
+      "type": "string",
+      "pattern": "^did:pkh:eip155:[0-9]+:0x[0-9a-fA-F]{40}$",
+      "description": "did:pkh of the invite's issuer, repeated so the edge reads without fetching the invite."
+    },
+    "member": {
+      "type": "string",
+      "pattern": "^did:pkh:eip155:[0-9]+:0x[0-9a-fA-F]{40}$",
+      "description": "did:pkh of the issuer; the verifier requires it to equal the credential's issuer and to differ from inviter."
+    }
+  },
+  "x-rules": [
+    "credentialSubject.member == issuer",
+    "credentialSubject.member != credentialSubject.inviter (no self-referral)",
+    "checked with its invite: credentialSubject.invite == CID(invite credential), the invite checks (bitwrap-invite.v1), credentialSubject.inviter == the invite's issuer",
+    "validUntil is absent"
+  ],
+  "x-credential": {
+    "standard": "W3C Verifiable Credentials Data Model 2.0; this schema constrains credentialSubject",
+    "credentialSchema": {
+      "id": "https://bitwrap.io/schema/bitwrap-invite-accept.v1.schema.json",
+      "type": "JsonSchema"
+    },
+    "type": [
+      "VerifiableCredential",
+      "BitwrapCredential"
+    ],
+    "issuer": "the member's did:pkh",
+    "proof": {
+      "type": "DataIntegrityProof",
+      "cryptosuite": "bitwrap-eip712-jcs-2026",
+      "proofPurpose": "assertionMethod"
+    },
+    "canonicalization": "RFC 8785 (JCS)",
+    "cid": "CIDv1 dag-json sha2-256, base58btc, multibase z, of the whole credential (proof included)"
+  }
+}

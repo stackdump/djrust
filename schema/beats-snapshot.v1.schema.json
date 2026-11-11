@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://beats.bitwrap.io/schema/beats-snapshot.v1.schema.json",
+  "title": "BeatsSnapshot",
+  "description": "Canonical snapshot of a deterministic beats track: the minimal (genre, seed, structure) definition that fully determines the render, as JSON-LD. Its CID (sha2-256 of the JCS bytes, CIDv1 dag-json, base58btc) is the track's stable identity. Snapshots are not signed and are not owned: anyone can compute one. They are dedicated to the public domain under CC0 1.0 and carry that license in-band, so the dedication travels with every copy.",
+  "type": "object",
+  "required": [
+    "@context",
+    "@type",
+    "v",
+    "genre",
+    "seed",
+    "structure",
+    "license"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "@context": {
+      "const": "https://beats.bitwrap.io/schema/beats-share.context.jsonld"
+    },
+    "@type": {
+      "const": "BeatsSnapshot"
+    },
+    "v": {
+      "const": 1
+    },
+    "genre": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "structure": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    },
+    "license": {
+      "const": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "description": "CC0 1.0 Universal public domain dedication (SPDX: CC0-1.0)."
+    }
+  },
+  "x-license": {
+    "spdx": "CC0-1.0",
+    "url": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "scope": "the snapshot document and the (genre, seed, structure) definition it records"
+  }
+}

@@ -1,0 +1,304 @@
+{
+ "name": "MPK Mini Mk II",
+ "manufacturer": "Akai",
+ "match": "mpk.*mini",
+ "source": "Measured 2026-10-07 on this unit's current preset (captures/mpk.log). Differs from the factory map beats documents (knobs CC 70-77, pads notes 36-43): this preset sends knobs on CC 1-8 and pads as Program Change. Octave/ARP/tap/note-repeat/full-level send no MIDI. Re-capture if the preset changes in the MPK Editor.",
+ "groups": [
+  {
+   "id": "keys",
+   "type": "note",
+   "channel": 0,
+   "first": 0,
+   "count": 128,
+   "comment": "25 keys, 48-72 at default octave (measured); octave shift moves the range, so the whole note space is claimed"
+  },
+  {
+   "id": "knobs",
+   "type": "cc",
+   "channel": 0,
+   "numbers": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ],
+   "names": [
+    "knob1",
+    "knob2",
+    "knob3",
+    "knob4",
+    "knob5",
+    "knob6",
+    "knob7",
+    "knob8"
+   ],
+   "comment": "CC n = knob n in this preset. CC 1 is ALSO the joystick's Y axis (mod) — the two cannot be told apart, so knob 1 is bound to something that rests at zero (reverb wet on the aimed deck)"
+  },
+  {
+   "id": "joystickX",
+   "type": "pitchbend",
+   "channel": 0,
+   "names": [
+    "joystickX"
+   ],
+   "comment": "14-bit pitch bend, centre 8192 (measured)"
+  },
+  {
+   "id": "pads",
+   "type": "program",
+   "channel": 0,
+   "numbers": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+   ],
+   "names": [
+    "pad1",
+    "pad2",
+    "pad3",
+    "pad4",
+    "pad5",
+    "pad6",
+    "pad7",
+    "pad8"
+   ],
+   "comment": "PROG CHANGE mode: pad n sends PC n-1 (measured; bank B sent the same values)"
+  },
+  {
+   "id": "padNotes",
+   "type": "note",
+   "channel": 9,
+   "first": 36,
+   "count": 16,
+   "comment": "[UNVERIFIED] (until learned: djapp Learn pad notes, docs/MPK.md) pads in NOTE mode, bank A 36-43 / bank B 44-51 on MIDI channel 10 (the factory numbers; a learned pad map replaces this group at start-up). Bank A = the aimed deck's parts on/off, as the APC track buttons: kick, snare, hihat, clap, bass, melody, harmony, arp (pads 1-8). Bank B = loops 1-8 under the mixer (pad n = loop n: pads 1-4 the bottom row, 5-8 the top)"
+  }
+ ],
+ "layout": [
+  {
+   "group": "keys",
+   "action": "keys"
+  },
+  {
+   "group": "knobs",
+   "index": 0,
+   "action": "reverbWet",
+   "deck": "*",
+   "reason": "CC 1 is also the joystick's Y axis (mod), so the two cannot be told apart; reverb wet on the aimed deck suits both: it rests at 0 where the stick springs back to, a push swells the room and letting go dries it"
+  },
+  {
+   "group": "knobs",
+   "index": 1,
+   "action": "volume",
+   "deck": "A"
+  },
+  {
+   "group": "knobs",
+   "index": 2,
+   "action": "volume",
+   "deck": "B"
+  },
+  {
+   "group": "knobs",
+   "index": 3,
+   "action": "crossfader"
+  },
+  {
+   "group": "knobs",
+   "index": 4,
+   "action": "filter",
+   "deck": "A"
+  },
+  {
+   "group": "knobs",
+   "index": 5,
+   "action": "filter",
+   "deck": "B"
+  },
+  {
+   "group": "knobs",
+   "index": 6,
+   "action": "pitch",
+   "deck": "A"
+  },
+  {
+   "group": "knobs",
+   "index": 7,
+   "action": "pitch",
+   "deck": "B"
+  },
+  {
+   "group": "joystickX",
+   "index": 0,
+   "action": "nudge"
+  },
+  {
+   "group": "pads",
+   "index": 0,
+   "action": "hotcue",
+   "deck": "A",
+   "slot": 0
+  },
+  {
+   "group": "pads",
+   "index": 1,
+   "action": "hotcue",
+   "deck": "A",
+   "slot": 1
+  },
+  {
+   "group": "pads",
+   "index": 2,
+   "action": "hotcue",
+   "deck": "A",
+   "slot": 2
+  },
+  {
+   "group": "pads",
+   "index": 3,
+   "action": "hotcue",
+   "deck": "A",
+   "slot": 3
+  },
+  {
+   "group": "pads",
+   "index": 4,
+   "action": "hotcue",
+   "deck": "B",
+   "slot": 0
+  },
+  {
+   "group": "pads",
+   "index": 5,
+   "action": "hotcue",
+   "deck": "B",
+   "slot": 1
+  },
+  {
+   "group": "pads",
+   "index": 6,
+   "action": "hotcue",
+   "deck": "B",
+   "slot": 2
+  },
+  {
+   "group": "pads",
+   "index": 7,
+   "action": "hotcue",
+   "deck": "B",
+   "slot": 3
+  },
+  {
+   "group": "padNotes",
+   "index": 0,
+   "action": "roleMute",
+   "deck": "*",
+   "role": "kick"
+  },
+  {
+   "group": "padNotes",
+   "index": 1,
+   "action": "roleMute",
+   "deck": "*",
+   "role": "snare"
+  },
+  {
+   "group": "padNotes",
+   "index": 2,
+   "action": "roleMute",
+   "deck": "*",
+   "role": "hihat"
+  },
+  {
+   "group": "padNotes",
+   "index": 3,
+   "action": "roleMute",
+   "deck": "*",
+   "role": "clap"
+  },
+  {
+   "group": "padNotes",
+   "index": 4,
+   "action": "roleMute",
+   "deck": "*",
+   "role": "bass"
+  },
+  {
+   "group": "padNotes",
+   "index": 5,
+   "action": "roleMute",
+   "deck": "*",
+   "role": "melody"
+  },
+  {
+   "group": "padNotes",
+   "index": 6,
+   "action": "roleMute",
+   "deck": "*",
+   "role": "harmony"
+  },
+  {
+   "group": "padNotes",
+   "index": 7,
+   "action": "roleMute",
+   "deck": "*",
+   "role": "arp"
+  },
+  {
+   "group": "padNotes",
+   "index": 8,
+   "action": "clipToggle",
+   "slot": 0
+  },
+  {
+   "group": "padNotes",
+   "index": 9,
+   "action": "clipToggle",
+   "slot": 1
+  },
+  {
+   "group": "padNotes",
+   "index": 10,
+   "action": "clipToggle",
+   "slot": 2
+  },
+  {
+   "group": "padNotes",
+   "index": 11,
+   "action": "clipToggle",
+   "slot": 3
+  },
+  {
+   "group": "padNotes",
+   "index": 12,
+   "action": "clipToggle",
+   "slot": 4
+  },
+  {
+   "group": "padNotes",
+   "index": 13,
+   "action": "clipToggle",
+   "slot": 5
+  },
+  {
+   "group": "padNotes",
+   "index": 14,
+   "action": "clipToggle",
+   "slot": 6
+  },
+  {
+   "group": "padNotes",
+   "index": 15,
+   "action": "clipToggle",
+   "slot": 7
+  }
+ ]
+}

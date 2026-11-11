@@ -1,0 +1,298 @@
+{
+ "name": "Computer keyboard",
+ "manufacturer": "software",
+ "match": "computer\\s*keyboard",
+ "source": "The software fallback: when 'Keys as controls' is on in the Map window, each key of the computer keyboard is a note on this device (note = the key's place in the group), so the binding layer, MIDI learn and the saved maps treat it like any controller. Written 2026-11-07. Every key is rebindable in the Bindings window.",
+ "groups": [
+  {
+   "id": "keys",
+   "type": "note",
+   "channel": 0,
+   "first": 0,
+   "count": 38,
+   "names": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "Q",
+    "W",
+    "E",
+    "R",
+    "T",
+    "Y",
+    "U",
+    "I",
+    "A",
+    "S",
+    "D",
+    "F",
+    "G",
+    "H",
+    "J",
+    "K",
+    "Z",
+    "X",
+    "C",
+    "V",
+    "B",
+    "N",
+    "M",
+    "Space",
+    "Tab",
+    "Enter",
+    "Left",
+    "Right",
+    "Up",
+    "Down"
+   ],
+   "comment": "1-8 hot cues, Q-R stingers, A S D F G loop and sync, Z cue (PFL), X cue, V next, B regenerate, Space play, Tab / Enter aim deck A / B; keys not named are free to bind"
+  }
+ ],
+ "layout": [
+  {
+   "group": "keys",
+   "index": 0,
+   "action": "hotcue",
+   "deck": "*",
+   "slot": 0
+  },
+  {
+   "group": "keys",
+   "index": 1,
+   "action": "hotcue",
+   "deck": "*",
+   "slot": 1
+  },
+  {
+   "group": "keys",
+   "index": 2,
+   "action": "hotcue",
+   "deck": "*",
+   "slot": 2
+  },
+  {
+   "group": "keys",
+   "index": 3,
+   "action": "hotcue",
+   "deck": "*",
+   "slot": 3
+  },
+  {
+   "group": "keys",
+   "index": 4,
+   "action": "hotcue",
+   "deck": "*",
+   "slot": 4
+  },
+  {
+   "group": "keys",
+   "index": 5,
+   "action": "hotcue",
+   "deck": "*",
+   "slot": 5
+  },
+  {
+   "group": "keys",
+   "index": 6,
+   "action": "hotcue",
+   "deck": "*",
+   "slot": 6
+  },
+  {
+   "group": "keys",
+   "index": 7,
+   "action": "hotcue",
+   "deck": "*",
+   "slot": 7
+  },
+  {
+   "group": "keys",
+   "index": 8,
+   "action": "stinger",
+   "deck": "*",
+   "slot": 0
+  },
+  {
+   "group": "keys",
+   "index": 9,
+   "action": "stinger",
+   "deck": "*",
+   "slot": 1
+  },
+  {
+   "group": "keys",
+   "index": 10,
+   "action": "stinger",
+   "deck": "*",
+   "slot": 2
+  },
+  {
+   "group": "keys",
+   "index": 11,
+   "action": "stinger",
+   "deck": "*",
+   "slot": 3
+  },
+  {
+   "group": "keys",
+   "index": 12,
+   "action": "unbound",
+   "reason": "free: bind this key to any target"
+  },
+  {
+   "group": "keys",
+   "index": 13,
+   "action": "unbound",
+   "reason": "free: bind this key to any target"
+  },
+  {
+   "group": "keys",
+   "index": 14,
+   "action": "unbound",
+   "reason": "free: bind this key to any target"
+  },
+  {
+   "group": "keys",
+   "index": 15,
+   "action": "unbound",
+   "reason": "free: bind this key to any target"
+  },
+  {
+   "group": "keys",
+   "index": 16,
+   "action": "loopIn",
+   "deck": "*"
+  },
+  {
+   "group": "keys",
+   "index": 17,
+   "action": "sync",
+   "deck": "*"
+  },
+  {
+   "group": "keys",
+   "index": 18,
+   "action": "loopOut",
+   "deck": "*"
+  },
+  {
+   "group": "keys",
+   "index": 19,
+   "action": "loopHalve",
+   "deck": "*"
+  },
+  {
+   "group": "keys",
+   "index": 20,
+   "action": "loopDouble",
+   "deck": "*"
+  },
+  {
+   "group": "keys",
+   "index": 21,
+   "action": "unbound",
+   "reason": "free: bind this key to any target"
+  },
+  {
+   "group": "keys",
+   "index": 22,
+   "action": "unbound",
+   "reason": "free: bind this key to any target"
+  },
+  {
+   "group": "keys",
+   "index": 23,
+   "action": "unbound",
+   "reason": "free: bind this key to any target"
+  },
+  {
+   "group": "keys",
+   "index": 24,
+   "action": "pfl",
+   "deck": "*"
+  },
+  {
+   "group": "keys",
+   "index": 25,
+   "action": "cue",
+   "deck": "*"
+  },
+  {
+   "group": "keys",
+   "index": 26,
+   "action": "unbound",
+   "reason": "free: bind this key to any target"
+  },
+  {
+   "group": "keys",
+   "index": 27,
+   "action": "nextTrack",
+   "deck": "*"
+  },
+  {
+   "group": "keys",
+   "index": 28,
+   "action": "regenerate",
+   "deck": "*"
+  },
+  {
+   "group": "keys",
+   "index": 29,
+   "action": "unbound",
+   "reason": "free: bind this key to any target"
+  },
+  {
+   "group": "keys",
+   "index": 30,
+   "action": "unbound",
+   "reason": "free: bind this key to any target"
+  },
+  {
+   "group": "keys",
+   "index": 31,
+   "action": "play",
+   "deck": "*"
+  },
+  {
+   "group": "keys",
+   "index": 32,
+   "action": "focusDeck",
+   "slot": 0
+  },
+  {
+   "group": "keys",
+   "index": 33,
+   "action": "focusDeck",
+   "slot": 1
+  },
+  {
+   "group": "keys",
+   "index": 34,
+   "action": "unbound",
+   "reason": "free: bind this key to any target"
+  },
+  {
+   "group": "keys",
+   "index": 35,
+   "action": "unbound",
+   "reason": "free: bind this key to any target"
+  },
+  {
+   "group": "keys",
+   "index": 36,
+   "action": "unbound",
+   "reason": "free: bind this key to any target"
+  },
+  {
+   "group": "keys",
+   "index": 37,
+   "action": "unbound",
+   "reason": "free: bind this key to any target"
+  }
+ ]
+}

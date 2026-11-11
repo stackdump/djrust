@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bitwrap.io/schema/bitwrap-snapshot-share.v1.schema.json",
+  "title": "BitwrapSnapshotShare",
+  "description": "\"I share this mix\": a signed reference to a whole-session snapshot (dj-snapshot.v1) by its CID. The snapshot itself stays unsigned data, served by its CID (cdn.bitwrap.io /ipfs/<cid>/snapshot.json); a verifier fetches it and checks it hashes to the CID named here. The credential's size does not depend on the session's, so it always fits the storage service's blob limit.",
+  "type": "object",
+  "required": [
+    "@type",
+    "v",
+    "id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "@type": {
+      "const": "BitwrapSnapshotShare"
+    },
+    "v": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^ipfs://z[1-9A-HJ-NP-Za-km-z]{40,128}$",
+      "description": "The snapshot: ipfs:// plus the CID of its dj-snapshot.v1 document."
+    }
+  },
+  "x-rules": [
+    "the document the id names is a dj-snapshot.v1 DjSnapshot whose CID is that id's",
+    "validUntil is optional"
+  ],
+  "x-credential": {
+    "standard": "W3C Verifiable Credentials Data Model 2.0; this schema constrains credentialSubject",
+    "credentialSchema": {
+      "id": "https://bitwrap.io/schema/bitwrap-snapshot-share.v1.schema.json",
+      "type": "JsonSchema"
+    },
+    "type": [
+      "VerifiableCredential",
+      "BitwrapCredential"
+    ],
+    "issuer": "whoever shares the snapshot (their did:pkh)",
+    "proof": {
+      "type": "DataIntegrityProof",
+      "cryptosuite": "bitwrap-eip712-jcs-2026",
+      "proofPurpose": "assertionMethod"
+    },
+    "canonicalization": "RFC 8785 (JCS)",
+    "cid": "CIDv1 dag-json sha2-256, base58btc, multibase z, of the whole credential (proof included)"
+  }
+}

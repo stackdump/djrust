@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://beats.bitwrap.io/schema/beats-post.v1.schema.json",
+  "title": "BeatsPost",
+  "description": "A short text post / annotation on a snapshot. Text is deliberately 'safe and limited': a printable-ASCII allowlist, an explicit length cap, nothing else. Non-ASCII (including homoglyphs, zero-width and bidi-override characters), control characters (including newline and tab) and markup-significant punctuation are rejected, at sign time and again at verify time. The allowlist in x-textPolicy is the single source of truth; the pattern below is generated from it for generic validators.",
+  "type": "object",
+  "required": [
+    "@type",
+    "v",
+    "snapshotCID",
+    "text"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "@type": {
+      "const": "BeatsPost"
+    },
+    "v": {
+      "const": 1
+    },
+    "snapshotCID": {
+      "type": "string",
+      "pattern": "^z[1-9A-HJ-NP-Za-km-z]{40,128}$"
+    },
+    "parent": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^z[1-9A-HJ-NP-Za-km-z]{40,128}$",
+      "description": "envelope CID of the post being replied to"
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 280,
+      "pattern": "^[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 \\.,!\\?'\"\\-_:;\\(\\)\\+=\\/@#]{1,280}$"
+    }
+  },
+  "x-textPolicy": {
+    "allowedChars": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,!?'\"-_:;()+=/@#",
+    "maxLength": 280,
+    "minLength": 1,
+    "notes": "allowedChars is exactly: A-Z a-z 0-9, space, and . , ! ? ' \" - _ : ; ( ) + = / @ #. Excluded on purpose: < > & ` \\ { } [ ] | ~ ^ $ * % and every non-ASCII code point. Leading/trailing space and runs of 2+ spaces are also rejected."
+  },
+  "x-rules": [
+    "text satisfies x-textPolicy at sign time and at verify time"
+  ],
+  "x-credential": {
+    "standard": "W3C Verifiable Credentials Data Model 2.0; this schema constrains credentialSubject",
+    "credentialSchema": {
+      "id": "https://beats.bitwrap.io/schema/beats-post.v1.schema.json",
+      "type": "JsonSchema"
+    },
+    "type": [
+      "VerifiableCredential",
+      "BitwrapCredential"
+    ],
+    "issuer": "the poster's did:pkh",
+    "proof": {
+      "type": "DataIntegrityProof",
+      "cryptosuite": "bitwrap-eip712-jcs-2026",
+      "proofPurpose": "assertionMethod"
+    },
+    "canonicalization": "RFC 8785 (JCS)",
+    "cid": "CIDv1 dag-json sha2-256, base58btc, multibase z, of the whole credential (proof included)"
+  }
+}

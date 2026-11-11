@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bitwrap.io/schema/bitwrap-revocation.v1.schema.json",
+  "title": "BitwrapRevocation",
+  "description": "Pre-signed revocation of an identity: issued by the identity itself at creation, kept by the user (file, QR, print) and sent when the key is lost. It names no successor, so whoever holds it can only end the identity, never take it over. It takes effect at its place in the identity log (its seq), not at its validFrom.",
+  "type": "object",
+  "required": [
+    "@type",
+    "v",
+    "id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "@type": {
+      "const": "BitwrapRevocation"
+    },
+    "v": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^did:pkh:eip155:[0-9]+:0x[0-9a-fA-F]{40}$",
+      "description": "The identity revoked: the credential subject, and its issuer."
+    }
+  },
+  "x-rules": [
+    "credentialSubject.id == issuer",
+    "validUntil is absent",
+    "the subject is a member; one revocation per member",
+    "scope is the member only; a subtree revocation would be a separate, root-signed schema"
+  ],
+  "x-credential": {
+    "standard": "W3C Verifiable Credentials Data Model 2.0; this schema constrains credentialSubject",
+    "credentialSchema": {
+      "id": "https://bitwrap.io/schema/bitwrap-revocation.v1.schema.json",
+      "type": "JsonSchema"
+    },
+    "type": [
+      "VerifiableCredential",
+      "BitwrapCredential"
+    ],
+    "issuer": "the revoked identity's own did:pkh",
+    "proof": {
+      "type": "DataIntegrityProof",
+      "cryptosuite": "bitwrap-eip712-jcs-2026",
+      "proofPurpose": "assertionMethod"
+    },
+    "canonicalization": "RFC 8785 (JCS)",
+    "cid": "CIDv1 dag-json sha2-256, base58btc, multibase z, of the whole credential (proof included)"
+  }
+}

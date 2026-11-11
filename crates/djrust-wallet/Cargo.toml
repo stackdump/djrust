@@ -1,0 +1,30 @@
+[package]
+name = "djrust-wallet"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "The bitwrap identity wallet core: did:pkh identities, W3C Verifiable Credentials with Data Integrity proofs (JCS, secp256k1 over EIP-712), selective disclosure, schemas and Merkle anchoring. No I/O, no network, no key storage."
+license = "MIT"
+repository = "https://github.com/stackdump/djrust"
+homepage = "https://beats.bitwrap.io"
+readme = "README.md"
+keywords = ["did", "verifiable-credentials", "secp256k1", "eip712", "jcs"]
+categories = ["cryptography", "wasm"]
+
+[lib]
+name = "djrust_wallet"
+
+[dependencies]
+# secp256k1 in pure Rust (RFC 6979, low-S): builds for wasm32 and Android without a C toolchain.
+k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+sha3 = "0.10"
+sha2 = "0.10"
+# arbitrary_precision: numbers keep their literal, so JCS sees exactly what was written.
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+# ECMAScript Number#toString, which RFC 8785 mandates for non-integers.
+ryu-js = "1"
+getrandom = "0.2"
+zeroize = "1"
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }

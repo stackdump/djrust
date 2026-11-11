@@ -1,0 +1,23 @@
+{
+ "name": "Behringer TD-3",
+ "manufacturer": "Behringer",
+ "match": "td-3",
+ "source": "Written 2026-11-07 for the binding map. A device the hub clocks and plays; this profile is only what it could send back. [UNVERIFIED] Not captured from a unit: the TD-3's knobs, switches and step buttons send no MIDI, and its keys and sequencer are assumed to put notes on its MIDI channel (default 1) over USB.",
+ "groups": [
+  {
+   "id": "keys",
+   "type": "note",
+   "channel": 0,
+   "first": 0,
+   "count": 128,
+   "comment": "[UNVERIFIED] the 13 keys C..C (pattern C = note 36) and the sequencer's notes; the whole note space is claimed so a transposed pattern still decodes"
+  }
+ ],
+ "layout": [
+  {
+   "group": "keys",
+   "action": "unbound",
+   "reason": "[UNVERIFIED] free: bind a key to any target in the Bindings window; nothing is bound until you do"
+  }
+ ]
+}
