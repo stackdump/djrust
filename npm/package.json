@@ -1,0 +1,27 @@
+{
+  "name": "djrust",
+  "version": "0.0.0",
+  "description": "The bitwrap audio engine as WebAssembly: a deterministic beats generator, wave engine and two DJ decks that render in an AudioWorklet. One ES module; the same genre, seed and structure renders the same samples everywhere.",
+  "license": "MIT",
+  "homepage": "https://beats.bitwrap.io",
+  "repository": { "type": "git", "url": "git+https://github.com/stackdump/djrust.git", "directory": "npm" },
+  "bugs": { "url": "https://github.com/stackdump/djrust/issues" },
+  "keywords": ["audio", "music", "dj", "beats", "audioworklet", "wasm", "webassembly", "petri-net"],
+  "type": "module",
+  "main": "./djrust.inline.js",
+  "module": "./djrust.inline.js",
+  "browser": "./djrust.inline.js",
+  "types": "./djrust.inline.d.ts",
+  "unpkg": "./djrust.inline.js",
+  "jsdelivr": "./djrust.inline.js",
+  "exports": {
+    ".": { "types": "./djrust.inline.d.ts", "default": "./djrust.inline.js" },
+    "./split": { "types": "./djrust.d.ts", "default": "./djrust.js" },
+    "./inline": { "types": "./djrust.inline.d.ts", "default": "./djrust.inline.js" },
+    "./djrust_bg.wasm": "./djrust_bg.wasm",
+    "./package.json": "./package.json"
+  },
+  "files": ["djrust.js", "djrust.d.ts", "djrust_bg.wasm", "djrust_bg.wasm.d.ts", "djrust.inline.js", "djrust.inline.d.ts", "README.md", "LICENSE"],
+  "sideEffects": false,
+  "publishConfig": { "access": "public" }
+}

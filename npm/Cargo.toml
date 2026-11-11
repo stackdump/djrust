@@ -1,0 +1,25 @@
+# The npm package's cdylib: links djrust's `wasm` facade and nothing else. Packaging only (not
+# published to crates.io); its own Cargo.lock pins wasm-bindgen to the CLI that builds it.
+[package]
+name = "djrust-npm"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+djrust = { path = "..", default-features = false, features = ["wasm"] }
+
+[features]
+default = []
+network = ["djrust/network"]
+
+[workspace]
+
+[profile.release]
+lto = "thin"
+opt-level = 3
