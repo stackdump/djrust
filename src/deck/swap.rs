@@ -149,7 +149,15 @@ pub fn same_song_options(
         o.musicality = o.musicality & f;
     }
     if let Some(g) = genre {
+        // a feel the song was given in place of its genre's (a deck's feel lock) stays with it
+        let pinned = o
+            .feel
+            .clone()
+            .filter(|f| o.genre.as_deref().and_then(GrooveTemplate::for_genre) != Some(f));
         o = o.for_genre(g);
+        if pinned.is_some() {
+            o.feel = pinned;
+        }
     }
     if let Some(l) = latest {
         o.track_gain = Some(l.gain);

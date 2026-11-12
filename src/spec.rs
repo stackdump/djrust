@@ -283,6 +283,12 @@ impl TrackSpec {
         s
     }
 
+    /// A groove family the spec plays in place of its genre's (`extra["grooveFamily"]`, a
+    /// `BeatsTables::family_of` index): a deck's feel lock. None: the genre's own.
+    pub fn groove_family(&self) -> Option<i64> {
+        self.extra.get("grooveFamily").and_then(JsonValue::as_i64)
+    }
+
     /// A key offset the spec pins (`extra["keyOffset"]`, semitones from the genre's root),
     /// set by a key-locked Wander.
     pub fn pinned_key_offset(&self) -> Option<i64> {

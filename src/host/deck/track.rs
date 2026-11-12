@@ -613,9 +613,20 @@ impl PreparedTrack {
     pub(crate) fn track_options(source: &TrackSource, palette: Option<&str>, seed: f64, preparer: &Preparer) -> WaveOptions {
         let mut o = preparer.options(seed);
         match source {
-            TrackSource::Net(spec) => o
-                .for_genre(&spec.genre)
-                .for_palette(palette, &spec.genre),
+            TrackSource::Net(spec) => {
+                let mut o = o
+                    .for_genre(&spec.genre)
+                    .for_palette(palette, &spec.genre);
+                // a deck's feel lock: another family's groove template in place of the genre's
+                // (`extra["grooveFamily"]`, as `TrackSpec::groove_family` reads it), under the same
+                // flag as the genre's own
+                if let Some(t) = spec.groove_family().and_then(crate::wave::GrooveTemplate::family_index) {
+                    if o.musicality.contains(Fixes::FEEL) {
+                        o.feel = Some(t.clone());
+                    }
+                }
+                o
+            }
             TrackSource::RawNets(payload) => {
                 o.musicality = o.musicality & Fixes::RUNNER_ONLY;
                 if let Some(genre) = Self::raw_genre(payload) {
@@ -1660,4 +1671,35 @@ fn _threads_can_carry() {
     send::<Preparer>();
     send::<MoveRequest>();
     send::<Prepared>();
+}
+
+#[cfg(test)]
+mod groove_family_tests {
+    use super::*;
+
+    /// A spec's `grooveFamily` (a deck's feel lock) plays that family's template in place of its
+    /// genre's; without it, a track's options are exactly its genre's.
+    #[test]
+    fn a_groove_family_replaces_the_genres_feel() {
+        let mut cfg = super::super::EngineConfig::new(48_000.0);
+        cfg.history_beats = None;
+        let (e, _r) = super::super::host::host_engine(cfg, false, true);
+        let prep = e.preparer("A").expect("deck A");
+        let t = crate::gen::BeatsTables::shared();
+        let house = t.family_of("house");
+        let other = (1..20).find(|f| *f != house && crate::wave::GrooveTemplate::family_index(*f).is_some()).expect("another family");
+        let plain = TrackSpec::parse("house:12").unwrap();
+        let base = PreparedTrack::track_options(&TrackSource::Net(plain.clone()), None, 1.0, &prep);
+        assert!(base.musicality.contains(Fixes::FEEL), "a host deck plays the feel fix");
+        assert_eq!(base.feel.as_ref(), crate::wave::GrooveTemplate::for_genre("house"));
+        let mut pinned = plain;
+        pinned.extra.set("grooveFamily", JsonValue::Number(other as f64));
+        let o = PreparedTrack::track_options(&TrackSource::Net(pinned), None, 1.0, &prep);
+        assert_eq!(o.feel.as_ref(), crate::wave::GrooveTemplate::family_index(other));
+        // a restart of the same song keeps the pinned feel, and a plain one keeps the genre's
+        let again = crate::deck::swap::same_song_options(&o, None, Some("house"), None, None);
+        assert_eq!(again.feel, o.feel);
+        let plain_again = crate::deck::swap::same_song_options(&base, None, Some("house"), None, None);
+        assert_eq!(plain_again.feel, base.feel);
+    }
 }
