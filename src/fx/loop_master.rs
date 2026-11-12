@@ -62,6 +62,8 @@ pub enum LoopMasterCommand {
     Slider { key: u8, value: i16 },
     /// Cancel and restore everything (pending fires too); a running brake releases.
     Panic,
+    /// Let go of a latched master macro ([`MasterMacro::raw`]): its sliders go back.
+    Release { id: u8 },
     /// The FX unit: a control, a reset, the kill. (No sends: the bus has no room or echo of its
     /// own.)
     FxUnit(FxUnitCommand),
@@ -254,6 +256,17 @@ impl LoopMasterBus {
                     }
                 });
                 self.dispatch_events();
+            }
+            LoopMasterCommand::Release { id } => {
+                if let Some(m) = MasterMacro::from_raw(id) {
+                    let events = &mut self.events;
+                    self.fx.release(m, &mut |e| {
+                        if events.len() < EVENT_CAPACITY {
+                            events.push(e)
+                        }
+                    });
+                    self.dispatch_events();
+                }
             }
             LoopMasterCommand::FxUnit(u) => self.unit.take(u),
         }

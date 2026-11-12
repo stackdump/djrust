@@ -376,6 +376,9 @@ pub struct DeckTricks {
     /// The render frame a riser ends on: then it is no longer on (so a latched pad starts the
     /// next one with one press).
     pub(crate) riser_end: Option<i64>,
+    /// What [`Engine::engage`] has on, by catalogue id, and the work it has waiting.
+    pub(crate) engaged: BTreeMap<String, super::engage::Engaged>,
+    pub(crate) jobs: Vec<super::engage::FxJob>,
 }
 
 impl DeckTricks {
@@ -393,6 +396,8 @@ pub enum TrickQuant {
     Now,
     /// On the next multiple of this many beats.
     Beats(f64),
+    /// At this render frame exactly (a bar the caller already worked out).
+    Frame(i64),
 }
 
 impl TrickQuant {
@@ -586,7 +591,7 @@ impl Engine {
     }
 
     /// Frames per beat on `deck` now (its running tempo; the master's when it has none).
-    fn deck_fpb(&self, deck: &str) -> f64 {
+    pub(crate) fn deck_fpb(&self, deck: &str) -> f64 {
         let bpm = self
             .deck(deck)
             .and_then(|d| d.beat_state(self.sample_rate))
@@ -598,7 +603,7 @@ impl Engine {
 
     /// The render frame of `deck`'s next multiple of `q` beats, at least [`LEAD_FRAMES`] ahead.
     /// None: at once (a stopped deck, one with no beat).
-    fn deck_grid_frame(&self, deck: &str, q: f64) -> Option<i64> {
+    pub(crate) fn deck_grid_frame(&self, deck: &str, q: f64) -> Option<i64> {
         let d = self.deck(deck)?;
         if !d.playing || q <= 0.0 {
             return None;
@@ -653,8 +658,12 @@ impl Engine {
             TrickQuant::Default => kind.default_quantum(),
             TrickQuant::Now => 0.0,
             TrickQuant::Beats(b) => b,
+            TrickQuant::Frame(_) => 0.0,
         };
-        let at = self.deck_grid_frame(deck, q);
+        let at = match quant {
+            TrickQuant::Frame(f) => Some(f),
+            _ => self.deck_grid_frame(deck, q),
+        };
         let fpb = self.deck_fpb(deck);
         if let Some(scale) = kind.time_scale() {
             // the deck's tempo is the main thread's: applied when the frame comes round
@@ -765,6 +774,7 @@ impl Engine {
                     TrickQuant::Default => kind.default_quantum(),
                     TrickQuant::Now => 0.0,
                     TrickQuant::Beats(b) => b,
+                    TrickQuant::Frame(_) => 0.0,
                 };
                 let now = self.loop_frames();
                 let start = self.deck_grid_frame(&deck, q).unwrap_or(now);
@@ -957,6 +967,7 @@ impl Engine {
     /// Keep the tricks on the decks' tempo (sends on change; `sync_history_tempo` calls it).
     pub fn sync_trick_tempo(&mut self) {
         self.service_time_scale();
+        self.service_engagements();
         // a riser that has run its length is over
         for d in self.decks.iter_mut() {
             if let Some(end) = d.tricks.riser_end {
