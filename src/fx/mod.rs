@@ -27,6 +27,7 @@ pub mod automation;
 pub mod aux_bus;
 pub mod aux_macro;
 pub mod brake;
+pub mod catalogue;
 pub mod limiter;
 pub mod loop_fx;
 pub mod loop_master;

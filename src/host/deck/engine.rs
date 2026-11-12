@@ -1566,6 +1566,7 @@ impl Engine {
             self.linked_loop_master(None, None);
             // the pan, shape and aux macros aimed at it end with it, everything put back
             self.cancel_aux_macros(Some(deck));
+            self.clear_engagements(deck);
         }
         ok
     }

@@ -57,7 +57,12 @@ pub enum AuxMsg {
     },
     /// Stop the macros aimed at a target (all of them with None) and put everything back.
     Cancel(Option<AuxTarget>),
+    /// Stop one macro on a target (a latch let go) and put back what it moved.
+    CancelOne(AuxMacro, AuxTarget),
 }
+
+/// How many bars a latched aux macro is fired for: it holds until it is let go.
+pub const LATCH_BARS: i32 = 1_000_000;
 
 /// What the render thread tells the others.
 #[derive(Default)]
@@ -201,6 +206,17 @@ impl AuxRender {
                     self.active.retain(|a| !same(a));
                 }
                 self.active.push(Active { m, target, start, len, beat_frames, starts });
+            }
+            AuxMsg::CancelOne(m, target) => {
+                let mut k = self.active.len();
+                while k > 0 {
+                    k -= 1;
+                    if self.active[k].m == m && self.active[k].target == target {
+                        let a = self.active.remove(k);
+                        self.end(&a);
+                    }
+                }
+                self.let_go(strips);
             }
             AuxMsg::Cancel(t) => {
                 // in place: this runs on the render thread
@@ -552,7 +568,12 @@ impl Engine {
             _ => (0, self.master_tempo().1),
         };
         let bpm = if bpm.is_finite() && bpm > 0.0 { bpm } else { 120.0 };
-        let bars = bars.filter(|b| *b > 0).unwrap_or(m.default_duration());
+        // 0 is permanent (a latch): it holds until [`Engine::release_aux_macro`]
+        let bars = match bars {
+            Some(0) => LATCH_BARS,
+            Some(b) if b > 0 => b,
+            _ => m.default_duration(),
+        };
         self.aux_send_msg(AuxMsg::Fire {
             m,
             target,
@@ -584,15 +605,24 @@ impl Engine {
         }
         let words = match bars {
             Some(b) if b > 0 => format!("{id} on {deck} ({b} bars)"),
+            Some(0) => format!("{id} on {deck} (latched)"),
             _ => format!("{id} on {deck}"),
         };
         let mut params = vec![("macro", JsonValue::str(id)), ("deck", JsonValue::str(deck))];
-        if let Some(b) = bars.filter(|b| *b > 0) {
+        if let Some(b) = bars.filter(|b| *b >= 0) {
             params.push(("bars", JsonValue::Number(b as f64)));
         }
         let (key, text) = (format!("aux:macro:{id}"), words);
         self.aux_trace_vec(key, text, false, params);
         true
+    }
+
+    /// Let go of one aux macro on `deck` (a latch): what it moved is put back.
+    pub fn release_aux_macro(&mut self, deck: &str, m: AuxMacro) -> bool {
+        match self.aux_target(deck) {
+            Some(t) => self.aux_send_msg(AuxMsg::CancelOne(m, t)),
+            None => false,
+        }
     }
 
     /// Put every running aux macro, or a strip's, back.

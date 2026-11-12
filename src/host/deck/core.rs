@@ -96,6 +96,10 @@ pub enum Command {
         m: MasterMacro,
         bars: i16,
     },
+    /// Let go of a latched master macro: its sliders go back.
+    MasterRelease(MasterMacro),
+    /// End the net macros running (mutes restore, tempo effects put back), notes untouched.
+    MacroEnd,
     /// A hand on a master FX slider (the slider's own units).
     MasterFx {
         key: MasterFxKey,
@@ -914,6 +918,20 @@ impl DeckCore {
                 self.dispatch_events();
                 self.runner.mark_macro_running(ticks);
             }
+            Command::MasterRelease(m) if self.sample_mode => {
+                self.sample_bus.send(LoopMasterCommand::Release { id: m.raw() });
+            }
+            Command::MasterRelease(m) => {
+                self.sync_fx();
+                let events = &mut self.events;
+                self.fx.release(m, &mut |e| {
+                    if events.len() < EVENT_CAPACITY {
+                        events.push(e)
+                    }
+                });
+                self.dispatch_events();
+            }
+            Command::MacroEnd => self.runner.panic(),
             Command::MasterFx { key, value } if self.sample_mode => {
                 self.sample_bus.send(LoopMasterCommand::Slider {
                     key: key.index() as u8,

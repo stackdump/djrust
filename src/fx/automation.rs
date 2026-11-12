@@ -136,6 +136,11 @@ pub struct FxAutomation {
     target_x: Vec<f64>,
     target_y: Vec<f64>,
     default_bars: Vec<i32>,
+    // MARK: latched (permanent) macros: what each put back on release
+    latch_on: Vec<bool>,
+    latch_prior: Vec<i32>,
+    latch_puck: Vec<(f64, f64)>,
+    latch_bpm: Vec<f64>,
 }
 
 impl FxAutomation {
@@ -215,6 +220,10 @@ impl FxAutomation {
             target_x: vec![0.0; m],
             target_y: vec![0.0; m],
             default_bars: vec![1; m],
+            latch_on: vec![false; m],
+            latch_prior: vec![0; m * Self::MAX_OPS],
+            latch_puck: vec![(0.5, 0.5); m],
+            latch_bpm: vec![0.0; m],
         };
         for mac in MasterMacro::ALL {
             let i = mac.raw() as usize;
@@ -337,6 +346,9 @@ impl FxAutomation {
                     let k = self.op_key[i * Self::MAX_OPS + j];
                     let to = self.op_to[i * Self::MAX_OPS + j];
                     if permanent {
+                        if !self.latch_on[i] {
+                            self.latch_prior[i * Self::MAX_OPS + j] = self.sliders[k];
+                        }
                         self.set_fx(k, to);
                     } else if self.kind_code[i] == 0 {
                         self.fx_sweep(k, to, duration_ms, mac.raw());
@@ -362,6 +374,11 @@ impl FxAutomation {
             }
             3 => {
                 if permanent {
+                    if !self.latch_on[i] {
+                        self.latch_puck[i] = (self.puck_x, self.puck_y);
+                        self.latch_bpm[i] = self.tempo;
+                        self.latch_prior[i * Self::MAX_OPS] = self.sliders[MasterFxKey::LpFreq.index()];
+                    }
                     self.cancel_feel_anim(emit);
                     let (x, y) = (clamp01(self.target_x[i]), clamp01(self.target_y[i]));
                     self.apply_feel(x, y, emit);
@@ -372,12 +389,51 @@ impl FxAutomation {
             4 => self.feel_sweep(i, duration_ms, emit),
             _ => self.feel_genre_reset(mac.raw(), duration_ms, emit),
         }
+        if permanent && matches!(self.kind_code[i], 0 | 1 | 3) {
+            self.latch_on[i] = true;
+        }
         // runtime.js: permanent macros budget the pulse (`min(3 bars, 4 s)`), others the duration.
         if permanent {
             let pulse_ms = (3.0 * self.ms_per_bar()).min(4000.0);
             return 1i64.max(libm::ceil(pulse_ms / ms_per_tick) as i64);
         }
         duration_ticks
+    }
+
+    /// Is `mac` held on by a permanent fire (a latch)?
+    pub fn latched(&self, mac: MasterMacro) -> bool {
+        self.latch_on[mac.raw() as usize]
+    }
+
+    /// Let go of a latched macro: its sliders (or the Feel puck and tempo) go back to what they
+    /// were when it was latched. Nothing when it is not latched.
+    pub fn release(&mut self, mac: MasterMacro, emit: &mut dyn FnMut(FxAutomationEvent)) {
+        let i = mac.raw() as usize;
+        if !self.latch_on[i] {
+            return;
+        }
+        self.latch_on[i] = false;
+        match self.kind_code[i] {
+            0 | 1 => {
+                for j in 0..self.op_count[i] {
+                    let k = self.op_key[i * Self::MAX_OPS + j];
+                    let v = self.latch_prior[i * Self::MAX_OPS + j] as f64;
+                    self.set_fx(k, v);
+                }
+            }
+            3 => {
+                let (x, y) = self.latch_puck[i];
+                self.apply_feel(x, y, emit);
+                let bpm = self.latch_bpm[i];
+                if bpm > 0.0 {
+                    self.set_tempo(bpm, emit);
+                }
+                let lp = self.latch_prior[i * Self::MAX_OPS] as f64;
+                self.set_fx(MasterFxKey::LpFreq.index(), lp);
+            }
+            _ => {}
+        }
+        self.flush_pending(emit);
     }
 
     /// `clearLocalMacroState` (panic, transport stop): drop the sub-fires, cancel the Feel
@@ -858,4 +914,35 @@ impl FxAutomation {
 
 fn clamp01(v: f64) -> f64 {
     0.0f64.max(1.0f64.min(v))
+}
+
+#[cfg(test)]
+mod latch_tests {
+    use super::*;
+
+    #[test]
+    fn a_permanent_macro_holds_and_release_puts_the_sliders_back() {
+        let mut a = FxAutomation::new(120.0, 120.0);
+        let mut ev = |_e: FxAutomationEvent| {};
+        let before = a.slider(MasterFxKey::CrushBits);
+        a.fire(MasterMacro::BuildCrush, Some(0), &mut ev);
+        assert!(a.latched(MasterMacro::BuildCrush));
+        assert_ne!(a.slider(MasterFxKey::CrushBits), before, "it jumped to its value and stays");
+        a.release(MasterMacro::BuildCrush, &mut ev);
+        assert!(!a.latched(MasterMacro::BuildCrush));
+        assert_eq!(a.slider(MasterFxKey::CrushBits), before);
+        assert_eq!(a.slider(MasterFxKey::Distortion), MasterFxKey::Distortion.default_value());
+    }
+
+    #[test]
+    fn a_latched_feel_snap_gives_back_the_puck_when_released() {
+        let mut a = FxAutomation::new(120.0, 120.0);
+        let mut ev = |_e: FxAutomationEvent| {};
+        let (x, y) = a.puck();
+        a.fire(MasterMacro::FeelDrive, Some(0), &mut ev);
+        assert!(a.latched(MasterMacro::FeelDrive));
+        a.release(MasterMacro::FeelDrive, &mut ev);
+        assert!(!a.latched(MasterMacro::FeelDrive));
+        assert_eq!(a.puck(), (x, y));
+    }
 }
