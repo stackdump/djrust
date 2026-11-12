@@ -1,6 +1,6 @@
 {
   "name": "djrust",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "The bitwrap audio engine as WebAssembly: a deterministic beats generator, wave engine and two DJ decks that render in an AudioWorklet. One ES module; the same genre, seed and structure renders the same samples everywhere.",
   "license": "MIT",
   "homepage": "https://beats.bitwrap.io",

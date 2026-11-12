@@ -43,6 +43,6 @@ b64 = base64.b64encode((out / "djrust_bg.wasm").read_bytes()).decode()
     "initSync({ module: bytes });\n")
 (out / "djrust.inline.d.ts").write_text("export * from './djrust.js';\n")
 PY
-sed "s/\"version\": \"0.0.0\"/\"version\": \"$version\"/" package.json > "$out/package.json"
+sed "s/\"version\": \"[^\"]*\"/\"version\": \"$version\"/" package.json > "$out/package.json"
 cp ../LICENSE "$out/LICENSE"; cp README.md "$out/README.md"
 ls -l "$out"
