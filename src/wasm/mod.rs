@@ -21,6 +21,7 @@ use crate::host::deck::engine::{Engine, EngineConfig, Renderer};
 use crate::host::deck::host::host_engine;
 use wasm_bindgen::prelude::*;
 
+pub mod beats;
 pub mod install;
 pub mod snapshot;
 
@@ -41,6 +42,12 @@ pub struct Dj {
     /// How much the instance's memory grew to boot the first engine: what a restore warms
     /// before it boots another (0 off wasm).
     engine_bytes: usize,
+    /// The beats studio's readers of each deck's fires, ticks and marking ([`events`](Dj::events)).
+    events: [beats::Events; 2],
+}
+
+fn deck_ix(deck: &str) -> usize {
+    if deck == "B" { 1 } else { 0 }
 }
 
 /// Pieces of a swapped-out engine freed per render quantum: a piece is at most ~0.6 ms
@@ -128,7 +135,7 @@ impl Dj {
         let before = install::memory_bytes();
         let (engine, renderer) = boot(sample_rate);
         let engine_bytes = install::memory_bytes() - before;
-        Dj { engine, renderer, sample_rate, installer: install::Installer::default(), offload: false, retiring: Vec::new(), engine_bytes }
+        Dj { engine, renderer, sample_rate, installer: install::Installer::default(), offload: false, retiring: Vec::new(), engine_bytes, events: Default::default() }
     }
 
     /// The engine's own composes go to the composer Worker (on) or run inline as before (off,
@@ -243,6 +250,7 @@ impl Dj {
         }
         Some(match self.installer.step(&mut self.engine, budget)? {
             install::Landed::Track { deck, answer, bytes, steps } => {
+                self.events[deck_ix(&deck)].reset(&self.engine, &deck);
                 format!("{{\"deck\":{},\"answer\":{},\"kb\":{},\"steps\":{steps}}}", q(&deck), q(&answer), bytes / 1024)
             }
             install::Landed::Failed { deck, error } => format!("{{\"deck\":{},\"error\":{}}}", q(&deck), q(&error)),
@@ -374,6 +382,49 @@ impl Dj {
         ))
     }
 
+    // MARK: the beats studio (`beats`)
+
+    /// Load a beats share envelope or a beats project (the studio worker's `projectToJSON`) on
+    /// `deck`, inline. It plays as a raw-`nets` share: exactly that project, no dj musicality
+    /// pass. Returns the load's answer. The deck's event reader starts over.
+    pub fn load_share(&mut self, deck: &str, text: &str) -> Result<String, JsError> {
+        let deck = deck_name(deck)?;
+        let source = beats::source_of(text).map_err(|e| JsError::new(&e))?;
+        self.installer.cancel(deck);
+        let a = beats::load(&mut self.engine, deck, source);
+        self.events[deck_ix(deck)].reset(&self.engine, deck);
+        Ok(a)
+    }
+
+    /// Mute or unmute one net of the project on `deck` (the studio's mixer, `initialMutes`).
+    pub fn set_net_muted(&mut self, deck: &str, net_id: &str, muted: bool) -> Result<bool, JsError> {
+        let deck = deck_name(deck)?;
+        Ok(self.engine.set_mute(deck, net_id, muted))
+    }
+
+    /// The net clock's tempo on `deck`, in BPM (the studio's tempo control).
+    pub fn set_tempo(&mut self, deck: &str, bpm: f64) -> Result<bool, JsError> {
+        let deck = deck_name(deck)?;
+        Ok(self.engine.set_tempo(deck, bpm))
+    }
+
+    /// Move `deck`'s net to `tick` (0: the top; a stop, a seek). The event reader starts over.
+    pub fn relocate(&mut self, deck: &str, tick: f64) -> Result<bool, JsError> {
+        let deck = deck_name(deck)?;
+        let ok = self.engine.relocate(deck, tick.max(0.0) as i64, None, None);
+        self.events[deck_ix(deck)].reset(&self.engine, deck);
+        Ok(ok)
+    }
+
+    /// What `deck` played since the last call ([`beats::Events::read`]): fires with their net and
+    /// transition ids, the newest tick, tempo and frame, the muted nets when they changed, and,
+    /// with `marking`, the token count of every place when it changed.
+    pub fn events(&mut self, deck: &str, marking: bool) -> Result<String, JsError> {
+        let deck = deck_name(deck)?;
+        let i = deck_ix(deck);
+        Ok(self.events[i].read(&self.engine, deck, marking))
+    }
+
     // MARK: whole-session snapshots (schema/dj-snapshot.v1.schema.json, docs/SNAPSHOTS.md)
 
     /// The session now, as canonical `DjSnapshot` JSON (the bytes its CID hashes).
@@ -466,6 +517,14 @@ impl DjComposer {
     pub fn prepare(&mut self, deck: &str, genre: &str, seed: f64, structure: &str, disabled: &str) -> Result<Vec<u8>, JsError> {
         let deck = deck_name(deck)?;
         let spec = spec_of(genre, seed, structure)?;
+        self.filter_roles(deck, disabled)?;
+        let p = self.engine.preparer(deck).ok_or_else(|| JsError::new("closed"))?;
+        let track = crate::host::deck::track::PreparedTrack::compose(&spec, &p, 0);
+        crate::host::deck::transfer::encode(track, &p).map_err(js_err)
+    }
+
+    /// The deck's role filter as the shell has it (`disabled`: a JSON list of role names).
+    fn filter_roles(&mut self, deck: &str, disabled: &str) -> Result<(), JsError> {
         let want: Vec<String> = match crate::json::JsonValue::parse(if disabled.trim().is_empty() { "[]" } else { disabled }) {
             Ok(v) => v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
             Err(e) => return Err(JsError::new(&format!("{e:?}"))),
@@ -483,8 +542,21 @@ impl DjComposer {
                 self.disabled.push((deck.into(), r));
             }
         }
+        Ok(())
+    }
+
+    /// [`prepare`](Self::prepare) for a beats share envelope or project (`Dj::load_share`'s
+    /// text): the bytes `Dj::begin_install` takes, for a raw-`nets` deck.
+    pub fn prepare_share(&mut self, deck: &str, text: &str, disabled: &str) -> Result<Vec<u8>, JsError> {
+        let deck = deck_name(deck)?;
+        let source = match beats::source_of(text).map_err(|e| JsError::new(&e))? {
+            crate::session::model::DeckSource::RawNets(p) => crate::host::deck::track::TrackSource::RawNets(p),
+            _ => return Err(JsError::new("not a raw-nets source")),
+        };
+        self.filter_roles(deck, disabled)?;
         let p = self.engine.preparer(deck).ok_or_else(|| JsError::new("closed"))?;
-        let track = crate::host::deck::track::PreparedTrack::compose(&spec, &p, 0);
+        let track = crate::host::deck::track::PreparedTrack::from_source(&source, &p, 0)
+            .ok_or_else(|| JsError::new("the share has no playable nets"))?;
         crate::host::deck::transfer::encode(track, &p).map_err(js_err)
     }
 
@@ -519,4 +591,44 @@ impl DjComposer {
     pub fn snapshot_schema_cid(&self) -> Result<String, JsError> {
         self.snapshot_cid(snapshot::SCHEMA_JSON)
     }
+}
+
+// MARK: free functions for the beats studio, its offline renderer and its parity gate
+
+/// The engine version: the crate (and npm package) version. Audio rendered by djrust is a
+/// function of the share CID and this.
+#[wasm_bindgen]
+pub fn engine_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Render `seconds` of a share envelope or beats project at `sample_rate` with no AudioContext:
+/// interleaved stereo f32, deterministic for one engine version ([`beats::render_offline`]).
+#[wasm_bindgen]
+pub fn render_offline(text: &str, seconds: f64, sample_rate: f64) -> Result<Vec<f32>, JsError> {
+    beats::render_offline(|| boot(sample_rate), text, seconds).map_err(|e| JsError::new(&e))
+}
+
+/// `compose(genre, overrides)` as `projectToJSON` writes it (`overrides`: JSON, "" for none).
+#[wasm_bindgen]
+pub fn compose_project(genre: &str, overrides: &str) -> Result<String, JsError> {
+    beats::compose_project(genre, overrides).map_err(|e| JsError::new(&e))
+}
+
+/// The model CID of `compose(genre, overrides)` (hex sha256 of `canonicalProjectJSON`).
+#[wasm_bindgen]
+pub fn compose_model_cid(genre: &str, overrides: &str) -> Result<String, JsError> {
+    beats::compose_model_cid(genre, overrides).map_err(|e| JsError::new(&e))
+}
+
+/// The model CID of a project's wire JSON.
+#[wasm_bindgen]
+pub fn project_model_cid(text: &str) -> Result<String, JsError> {
+    beats::project_model_cid(text).map_err(|e| JsError::new(&e))
+}
+
+/// A share envelope's CID (`z…`).
+#[wasm_bindgen]
+pub fn share_cid(text: &str) -> Result<String, JsError> {
+    beats::share_cid(text).map_err(|e| JsError::new(&e))
 }
