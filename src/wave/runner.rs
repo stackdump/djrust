@@ -303,6 +303,10 @@ pub struct WaveOptions {
     pub record_hits: bool,
     /// Which tonal lanes play a sampler instead of a synth voice ([`SampleBinder`]).
     pub sample_binder: Option<SampleBinder>,
+    /// Synth voices only: nothing binds a sampler, even with a sampler bank installed. A beats
+    /// share played as written (a raw-`nets` deck) has it, so it sounds the same on every
+    /// platform, the browser's (which has no sampled voices) included.
+    pub synth_only: bool,
     /// The deck's sampler bank (Swift's `samplers`): tonal lanes bind through it with the track's
     /// `picked` and palette option, and (with the instrument table) the drums of a track that
     /// picked a kit play it. It takes the place of `sample_binder` where both are set.
@@ -382,6 +386,7 @@ impl Default for WaveOptions {
             voicing_seed: 0.0,
             record_hits: false,
             sample_binder: None,
+            synth_only: false,
             bank: None,
             part_level: None,
             bank_rate: 0.0,

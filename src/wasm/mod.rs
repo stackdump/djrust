@@ -21,7 +21,7 @@ use crate::host::deck::engine::{Engine, EngineConfig, Renderer};
 use crate::host::deck::host::host_engine;
 use wasm_bindgen::prelude::*;
 
-pub mod beats;
+pub use crate::host::beats;
 pub mod install;
 pub mod snapshot;
 
@@ -588,9 +588,11 @@ impl DjComposer {
     /// text): the bytes `Dj::begin_install` takes, for a raw-`nets` deck.
     pub fn prepare_share(&mut self, deck: &str, text: &str, disabled: &str) -> Result<Vec<u8>, JsError> {
         let deck = deck_name(deck)?;
+        // as written (raw nets), or a `play: "dj"` share's spec, composed here with the DJ pass
         let source = match beats::source_of(text).map_err(|e| JsError::new(&e))? {
             crate::session::model::DeckSource::RawNets(p) => crate::host::deck::track::TrackSource::RawNets(p),
-            _ => return Err(JsError::new("not a raw-nets source")),
+            crate::session::model::DeckSource::Net(s) => crate::host::deck::track::TrackSource::Net(s),
+            _ => return Err(JsError::new("not a share")),
         };
         self.filter_roles(deck, disabled)?;
         let p = self.engine.preparer(deck).ok_or_else(|| JsError::new("closed"))?;

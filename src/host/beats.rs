@@ -12,8 +12,9 @@
 //! - the composer's project and model CID for the share-CID parity gate ([`compose_project`],
 //!   [`compose_model_cid`]), and the share CID of an envelope ([`share_cid`]).
 //!
-//! Everything here is plain Rust (strings in, strings out) so it is tested natively; `mod.rs`
-//! wraps it for wasm-bindgen.
+//! Everything here is plain Rust (strings in, strings out): the wasm facade (`djrust::wasm`)
+//! wraps it for wasm-bindgen, and native apps (the Android app) call it directly, so a beats
+//! share plays the same way on every platform.
 
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
@@ -85,9 +86,106 @@ pub fn play_payload(doc: &JsonValue) -> Result<JsonValue, String> {
     Ok(project_payload(&project.to_json(), share.genre.as_deref(), doc.get("seed")))
 }
 
-/// [`play_payload`] of a document's text, as a deck source.
+/// The share field naming how a share plays: absent is as written (beats' own sound: the
+/// project, synth voices); [`PLAY_DJ`] is djrust's DJ sound (the musicality pass over the
+/// composed track, the deck's palette), for a track a DJ app shares as it played it.
+pub const PLAY_KEY: &str = "play";
+pub const PLAY_DJ: &str = "dj";
+
+/// The envelope fields that name the format, not the track.
+const ENVELOPE_KEYS: [&str; 4] = ["@context", "@type", "v", PLAY_KEY];
+
+/// What a deck plays for a document's text: a [`PLAY_DJ`] share (genre + seed, no `nets`) as
+/// its track spec, so the deck composes it and runs the DJ pass; anything else as written,
+/// [`play_payload`] of it as raw nets.
 pub fn source_of(text: &str) -> Result<DeckSource, String> {
-    Ok(DeckSource::RawNets(play_payload(&parse(text)?)?))
+    let doc = parse(text)?;
+    let dj = doc.get(PLAY_KEY).and_then(JsonValue::as_str) == Some(PLAY_DJ);
+    if dj && !doc.get("nets").is_some_and(JsonValue::is_truthy) {
+        return dj_spec(&doc).map(DeckSource::Net);
+    }
+    Ok(DeckSource::RawNets(play_payload(&doc)?))
+}
+
+/// The track spec a [`PLAY_DJ`] share names (its payload without the envelope's own fields).
+pub fn dj_spec(doc: &JsonValue) -> Result<crate::TrackSpec, String> {
+    let JsonValue::Object(o) = doc else { return Err("a share is a JSON object".into()) };
+    let mut p = JsonObject::new();
+    for (k, v) in o.iter() {
+        if !ENVELOPE_KEYS.contains(&k) {
+            p.set(k, v.clone());
+        }
+    }
+    // a share without `cohesion` predates cohesion v2: beats composes it v1 (`shareFromPayload`),
+    // so the DJ pass runs on the project the studio shows
+    if p.get("cohesion").is_none() {
+        p.set("cohesion", "v1".into());
+    }
+    crate::TrackSpec::from_payload(&JsonValue::Object(p)).ok_or_else(|| "a dj share needs a genre and a seed".into())
+}
+
+/// The beats share envelope of `spec` played with djrust's DJ sound ([`PLAY_DJ`]): what a DJ
+/// app hands beats.bitwrap.io so a link plays there as it played on the deck. Its CID is not
+/// the as-written track's (it sounds different).
+pub fn dj_envelope(spec: &crate::TrackSpec) -> JsonValue {
+    let mut o = JsonObject::new();
+    o.set("@context", "https://beats.bitwrap.io/schema/beats-share".into());
+    o.set("@type", "BeatsShare".into());
+    o.set("v", JsonValue::int(1));
+    if let JsonValue::Object(p) = spec.payload() {
+        for (k, v) in p.iter() {
+            o.set(k, v.clone());
+        }
+    }
+    o.set(PLAY_KEY, PLAY_DJ.into());
+    JsonValue::Object(o)
+}
+
+/// What a beats link (`https://beats.bitwrap.io/?cid=…[&z=…]`, a `?query`, or a bare query)
+/// holds: the envelope itself (a self-contained `z` link, checked against its CID), or only the
+/// CID, whose envelope is fetched from the share store (`/o/{cid}`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum LinkSource {
+    Envelope(JsonValue),
+    NeedsFetch(String),
+}
+
+pub fn link_source(link: &str) -> Result<LinkSource, String> {
+    let q = link.split_once('?').map_or(link, |(_, q)| q);
+    let q = q.split_once('#').map_or(q, |(q, _)| q);
+    let get = |k: &str| {
+        q.split('&').find_map(|kv| kv.split_once('=').filter(|(a, _)| *a == k).map(|(_, v)| v))
+    };
+    let cid = get("cid").filter(|c| !c.is_empty()).ok_or("not a beats link: no cid")?;
+    if !cid.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err("not a beats link: bad cid".into());
+    }
+    match get("z").filter(|z| !z.is_empty()) {
+        None => Ok(LinkSource::NeedsFetch(cid.to_string())),
+        Some(z) => {
+            let text = crate::codec::b64url_to_gunzip(z).map_err(|e| alloc::format!("{e:?}"))?;
+            let doc = parse(&text)?;
+            if cid::share_cid(&doc) != cid {
+                return Err("the link's payload does not hash to its cid".into());
+            }
+            Ok(LinkSource::Envelope(doc))
+        }
+    }
+}
+
+/// An envelope fetched for a [`LinkSource::NeedsFetch`] cid, checked: it must hash to it.
+pub fn checked_envelope(cid: &str, text: &str) -> Result<JsonValue, String> {
+    let doc = parse(text)?;
+    if cid::share_cid(&doc) != cid {
+        return Err("the fetched envelope does not hash to the link's cid".into());
+    }
+    Ok(doc)
+}
+
+/// The self-contained link (`?cid=…&z=…`) of an envelope on `base`
+/// (e.g. `https://beats.bitwrap.io/`).
+pub fn link_of(envelope: &JsonValue, base: &str) -> String {
+    crate::share::ShareLink::forms(envelope, base).full
 }
 
 /// Load `source` on `deck`: the load's answer.
@@ -713,5 +811,81 @@ mod tests {
         run(&mut e, &mut r, 8);
         let got = perform(&mut e, "A", r#"{"op":"stinger","n":1}"#).unwrap();
         assert!(got == "done" || got.starts_with("ignored"), "{got}");
+    }
+
+    #[test]
+    fn a_dj_share_plays_its_spec_and_is_named_apart() {
+        let spec = crate::TrackSpec::parse("techno:42:standard").unwrap();
+        let env = dj_envelope(&spec);
+        assert_eq!(env.get(PLAY_KEY).and_then(JsonValue::as_str), Some(PLAY_DJ));
+        match source_of(&env.canonical_js()).unwrap() {
+            DeckSource::Net(back) => assert_eq!(back.payload(), spec.payload()),
+            other => panic!("a dj share played as {other:?}"),
+        }
+        // as written, the same track is another share (another sound, another CID)
+        let written = envelope("techno", 42);
+        assert!(matches!(source_of(&written).unwrap(), DeckSource::RawNets(_)));
+        assert_ne!(cid::share_cid(&env), cid::share_cid(&parse(&written).unwrap()));
+        assert!(dj_spec(&parse("{\"play\":\"dj\"}").unwrap()).is_err());
+        // beats' share rule: no cohesion is v1
+        let legacy = parse(r#"{"genre":"techno","seed":42,"play":"dj"}"#).unwrap();
+        assert_eq!(dj_spec(&legacy).unwrap().cohesion, "v1");
+    }
+
+    #[test]
+    fn links_give_their_envelope_or_the_cid_to_fetch() {
+        let doc = parse(&envelope("house", 7)).unwrap();
+        let c = cid::share_cid(&doc);
+        let full = link_of(&doc, "https://beats.bitwrap.io/");
+        match link_source(&full).unwrap() {
+            LinkSource::Envelope(got) => assert_eq!(got.canonical_js(), doc.canonical_js()),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(link_source(&alloc::format!("https://beats.bitwrap.io/?cid={c}")).unwrap(), LinkSource::NeedsFetch(c.clone()));
+        assert_eq!(link_source(&alloc::format!("cid={c}&title=x")).unwrap(), LinkSource::NeedsFetch(c.clone()));
+        // a z that is not the cid's envelope is refused
+        let other = link_of(&parse(&envelope("house", 8)).unwrap(), "https://beats.bitwrap.io/");
+        let z = other.split("&z=").nth(1).unwrap();
+        assert!(link_source(&alloc::format!("?cid={c}&z={z}")).is_err());
+        assert!(link_source("https://beats.bitwrap.io/feed").is_err());
+        assert!(checked_envelope(&c, &doc.canonical_js()).is_ok());
+        assert!(checked_envelope(&c, &envelope("house", 8)).is_err());
+    }
+
+    /// A beats share as written plays synth voices on every platform (a sampler bank, as the
+    /// Android app installs, binds nothing for it); a composed track may sample.
+    #[test]
+    fn a_share_as_written_is_synth_only() {
+        use crate::host::deck::track::{PreparedTrack, TrackSource};
+        let (e, _r) = boot();
+        let preparer = e.preparer("A").unwrap();
+        let DeckSource::RawNets(p) = source_of(&envelope("techno", 42)).unwrap() else { panic!() };
+        let raw = PreparedTrack::track_options(&TrackSource::RawNets(p), None, 42.0, &preparer);
+        assert!(raw.synth_only);
+        let spec = crate::TrackSpec::parse("techno:42").unwrap();
+        let net = PreparedTrack::track_options(&TrackSource::Net(spec), None, 42.0, &preparer);
+        assert!(!net.synth_only);
+    }
+
+    /// A compose in flight that the deck no longer wants (a share was opened on it) ends given
+    /// back, not loaded.
+    #[test]
+    fn a_cancelled_compose_does_not_land() {
+        use crate::host::deck::compose_job::{ComposeJobs, Landed};
+        let (mut e, _r) = boot();
+        let mut jobs = ComposeJobs::new();
+        assert!(jobs.ask(&e, "A", crate::TrackSpec::parse("house:3").unwrap()));
+        jobs.cancel("A");
+        let mut landed = Vec::new();
+        for _ in 0..600 {
+            landed.extend(jobs.poll(&mut e));
+            if !jobs.is_composing("A") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(landed.len(), 1);
+        assert_eq!(landed[0].landed, Landed::Superseded);
+        assert!(e.deck("A").and_then(|d| d.spec.as_ref()).is_none(), "the cancelled track loaded");
     }
 }

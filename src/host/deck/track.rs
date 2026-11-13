@@ -409,7 +409,8 @@ impl Preparer {
         #[cfg(feature = "sf2")]
         let mut slots: Option<std::sync::Arc<HostSlots>> = None;
         #[cfg(feature = "sf2")]
-        let _binding = self.bank.as_ref().map(|b| {
+        // a synth-only track (a beats share as written) binds nothing
+        let _binding = self.bank.as_ref().filter(|_| !opts.synth_only).map(|b| {
             b.lock().unwrap().seed = opts.voicing_seed;
             opts.sample_binder = Some(bind_thunk);
             // what each slot measured on the part probes, read back as the runner binds a lane
@@ -629,6 +630,8 @@ impl PreparedTrack {
             }
             TrackSource::RawNets(payload) => {
                 o.musicality = o.musicality & Fixes::RUNNER_ONLY;
+                // as written, with synth voices, as in the browser
+                o.synth_only = true;
                 if let Some(genre) = Self::raw_genre(payload) {
                     o = o
                         .for_genre(&genre)
@@ -1623,7 +1626,7 @@ impl Engine {
         let project = d.project.clone().filter(|_| d.is_net())?;
         let preparer = self.preparer(deck)?;
         let palette = swap::project_palette(&project);
-        let opts = swap::moved_options(
+        let mut opts = swap::moved_options(
             &preparer.options(d.seed),
             d.track.fixes,
             d.spec.as_ref().map(|s| s.genre.as_str()),
@@ -1632,6 +1635,8 @@ impl Engine {
             tail,
             rest,
         );
+        // a beats share as written stays synth-only through a relocation
+        opts.synth_only = d.track.raw_nets.is_some();
         Some(MoveRequest {
             preparer,
             project,

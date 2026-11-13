@@ -26,6 +26,8 @@ pub struct ComposeJob {
     pub deck: String,
     pub spec: TrackSpec,
     task: Task<Option<PreparedTrack>>,
+    /// [`ComposeJobs::cancel`]led: it ends given back, not loaded.
+    cancelled: bool,
 }
 
 /// Where a [`ComposeJob`] is.
@@ -56,6 +58,7 @@ impl ComposeJob {
             deck: deck.into(),
             spec,
             task,
+            cancelled: false,
         })
     }
 
@@ -133,6 +136,16 @@ impl ComposeJobs {
         }
     }
 
+    /// Drop `deck`'s waiting ask and let the compose in flight end unloaded (given back to the
+    /// bank): the deck loaded something else itself (a share link) that a compose landing later
+    /// must not replace.
+    pub fn cancel(&mut self, deck: &str) {
+        self.asked.retain(|(d, _)| d != deck);
+        for j in self.running.iter_mut().filter(|j| j.deck == deck) {
+            j.cancelled = true;
+        }
+    }
+
     /// Is a track composing, or waiting to, for `deck`?
     pub fn is_composing(&self, deck: &str) -> bool {
         self.running.iter().any(|j| j.deck == deck)
@@ -163,7 +176,7 @@ impl ComposeJobs {
                 .iter()
                 .position(|(d, _)| *d == job.deck)
                 .map(|at| self.asked.remove(at).1);
-            let landed = job.poll(e, newer.is_none());
+            let landed = job.poll(e, newer.is_none() && !job.cancelled);
             // the older track is handed back before the next worker starts
             if let Some(spec) = newer {
                 if let Some(next) = ComposeJob::start(e, &job.deck, spec) {
