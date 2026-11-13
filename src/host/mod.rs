@@ -12,6 +12,7 @@
 
 #[cfg(feature = "audio")]
 pub mod audio;
+pub mod beats;
 pub mod browse;
 pub mod caf;
 pub mod controllers;
