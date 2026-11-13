@@ -321,6 +321,137 @@ pub fn share_cid(text: &str) -> Result<String, String> {
     Ok(cid::share_cid(&parse(text)?))
 }
 
+// MARK: the studio's controls (FX panel, macros, Beats pads, mixer strips)
+
+/// Any [`DeckAction`] as JSON (`{"op": "masterFx", "key": "hp-freq", "value": 40}`,
+/// `{"op": "stinger", "n": 1}`, `{"op": "fxReset"}`, `{"op": "panic"}`, …) on `deck`, unless
+/// the action names its own. Returns `"done"`, or why it did not run (`"ignored: …"`,
+/// `"deferred: …"`); an op the parser does not know is an error.
+pub fn perform(engine: &mut Engine, deck: &str, text: &str) -> Result<String, String> {
+    use crate::host::deck::perform::Applied;
+    let mut v = parse(text)?;
+    if let JsonValue::Object(o) = &mut v {
+        if o.get("deck").is_none() {
+            o.set("deck", deck.into());
+        }
+    }
+    let a = DeckAction::from_json(&v).ok_or_else(|| alloc::format!("not a deck action: {text}"))?;
+    Ok(match engine.perform(&a, PerformCtx::default()) {
+        Applied::Done => "done".to_string(),
+        Applied::Ignored(w) => alloc::format!("ignored: {w}"),
+        Applied::Deferred(w) => alloc::format!("deferred: {w}"),
+    })
+}
+
+/// How long an engaged effect stays on: `"momentary"` (while held), `"latch"` (until let go),
+/// or a whole number of bars (`"1"` … `"4"`; `"bars:2"` reads the same).
+pub fn engagement(mode: &str) -> Result<crate::host::deck::engage::Engagement, String> {
+    use crate::host::deck::engage::Engagement;
+    let m = mode.trim();
+    match m {
+        "momentary" | "hold" | "" => Ok(Engagement::Momentary),
+        "latch" => Ok(Engagement::Latch),
+        _ => match m.strip_prefix("bars:").unwrap_or(m).parse::<u8>() {
+            Ok(b) if b >= 1 => Ok(Engagement::Bars(b)),
+            _ => Err(alloc::format!("engagement {mode:?}: momentary, latch or a number of bars")),
+        },
+    }
+}
+
+/// Fire beats macro `id` (`public/lib/macros/catalog.js`: sweeps, riser, cut, breakdown,
+/// pan and shape moves, `feel-*`, …) on `deck` for `bars` (0: the macro's own length), as the
+/// studio's Macros panel and Auto-DJ do. `"done"`, or why it did not run.
+pub fn fire_macro(engine: &mut Engine, deck: &str, id: &str, bars: i32) -> Result<String, String> {
+    use crate::host::deck::perform::Applied;
+    if !Engine::is_macro_id(id) {
+        return Err(alloc::format!("no macro {id:?}"));
+    }
+    Ok(match engine.apply_macro(deck, id, (bars > 0).then_some(bars)) {
+        Applied::Done => "done".to_string(),
+        Applied::Ignored(w) => alloc::format!("ignored: {w}"),
+        Applied::Deferred(w) => alloc::format!("deferred: {w}"),
+    })
+}
+
+/// Engage catalogue effect `id` ([`catalogue_json`]: a trick's name or a macro id) on
+/// `deck`'s next bar.
+pub fn engage(engine: &mut Engine, deck: &str, id: &str, mode: &str) -> Result<(), String> {
+    engine.engage(deck, id, engagement(mode)?)
+}
+
+/// Every effect the catalogue offers, for the studio's panels:
+/// `[{"id","label","category","transition","latchable","needsNet"}]` in catalogue order.
+pub fn catalogue_json() -> String {
+    let rows = crate::fx::catalogue::ENTRIES
+        .iter()
+        .map(|e| {
+            let mut o = JsonObject::new();
+            o.set("id", e.id.into());
+            o.set("label", e.label.into());
+            o.set("category", e.category.id().into());
+            o.set("transition", e.transition().into());
+            o.set("latchable", e.latchable().into());
+            o.set("needsNet", e.needs_net().into());
+            o.into()
+        })
+        .collect();
+    JsonValue::Array(rows).canonical_js()
+}
+
+/// The effects engaged on `deck` now: `[{"id","latched","pending"}]`, for the pads' lights.
+pub fn fx_state_json(engine: &Engine, deck: &str) -> String {
+    let rows = engine
+        .fx_state(deck)
+        .into_iter()
+        .map(|s| {
+            let mut o = JsonObject::new();
+            o.set("id", s.id.into());
+            o.set("latched", s.latched.into());
+            o.set("pending", s.pending.into());
+            o.into()
+        })
+        .collect();
+    JsonValue::Array(rows).canonical_js()
+}
+
+/// A mixer strip's voice on `deck`'s MIDI `channel`: the keys given (`gainDB`, `decayScale`,
+/// `lowpass`, `distortion`, … as [`VoiceTweak`](crate::wave::VoiceTweak) names them) change, a
+/// key given as `null` goes back to the instrument's own, the rest stay. Live, and kept across
+/// the next project's hand-over. False off a net deck or with no net on that channel.
+///
+/// `decayMul` (0.05 … 3, beats' mixer decay slider / 100) scales the instrument's own decay
+/// (`decayScale`) rather than setting it: 1 is the instrument's own.
+pub fn set_voice(engine: &mut Engine, deck: &str, channel: i64, text: &str) -> Result<bool, String> {
+    use crate::wave::VoiceTweak;
+    let v = parse(text)?;
+    if !matches!(v, JsonValue::Object(_)) {
+        return Err("a voice tweak is a JSON object".into());
+    }
+    let mut t = engine.voice_tweak(deck, channel);
+    for k in VoiceTweak::KEYS {
+        match v.get(k) {
+            Some(JsonValue::Null) => t.set(k, None),
+            Some(x) => {
+                let n = x.as_f64().ok_or_else(|| alloc::format!("{k}: not a number"))?;
+                t.set(k, Some(n));
+            }
+            None => {}
+        }
+    }
+    match v.get("decayMul") {
+        Some(JsonValue::Null) => t.set("decayScale", None),
+        Some(x) => {
+            let m = x.as_f64().ok_or("decayMul: not a number")?.clamp(0.05, 3.0);
+            let Some(base) = engine.channel_voice(deck, channel).map(|c| c.voice.decay_scale) else {
+                return Ok(false);
+            };
+            t.set("decayScale", if (m - 1.0).abs() < 1e-9 { None } else { Some(base * m) });
+        }
+        None => {}
+    }
+    Ok(engine.set_voice_tweak(deck, &t, channel))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,7 +522,8 @@ mod tests {
         }
         let got = cid::hex(&cid::sha256(&bytes));
         let want = match env!("CARGO_PKG_VERSION") {
-            "0.1.0" => "ca88a195487d8406c42226bc27786ea971e7e1698dc25de016a305f4a4817c21",
+            // 0.2.0 adds controls (perform, fire_macro, engage, set_voice); the render is unchanged
+            "0.1.0" | "0.2.0" => "ca88a195487d8406c42226bc27786ea971e7e1698dc25de016a305f4a4817c21",
             v => panic!("no golden render for djrust {v}: add it (render_offline techno:42, 10 s, 48 kHz)"),
         };
         assert_eq!(got, want, "techno:42 renders differently: a new engine version must bump the crate version");
@@ -456,5 +588,130 @@ mod tests {
         let after = pump(&mut e, &mut ev, 48_000 / QUANTUM);
         assert!(!after.contains(&kick), "{kick} still fires when muted");
         assert!(!after.is_empty());
+    }
+
+    /// A techno:42 deck, playing, and a way to run it: `run(e, r, blocks)` renders that many
+    /// quanta with the worklet's housekeeping and returns the left channel.
+    fn playing() -> (Engine, Renderer) {
+        let (mut e, r) = boot();
+        load(&mut e, "A", source_of(&envelope("techno", 42)).unwrap());
+        e.perform(&DeckAction::Play { deck: "A".into(), on: true }, PerformCtx::default());
+        (e, r)
+    }
+
+    fn run(e: &mut Engine, r: &mut Renderer, blocks: usize) -> Vec<f32> {
+        let (mut l, mut rr) = (vec![0.0f32; QUANTUM], vec![0.0f32; QUANTUM]);
+        let mut out = Vec::with_capacity(blocks * QUANTUM);
+        for k in 0..blocks {
+            r.render_block(&mut l, &mut rr);
+            out.extend_from_slice(&l);
+            if k % TICK_EVERY == TICK_EVERY - 1 {
+                e.service();
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn perform_takes_deck_actions_as_json() {
+        let (mut e, mut r) = playing();
+        run(&mut e, &mut r, 8);
+        // the deck is filled in when the action does not name one
+        assert_eq!(perform(&mut e, "A", r#"{"op":"masterFx","key":"lp-freq","value":10}"#).unwrap(), "done");
+        assert_eq!(perform(&mut e, "A", r#"{"op":"fxReset"}"#).unwrap(), "done");
+        assert!(perform(&mut e, "A", r#"{"op":"panic"}"#).unwrap().len() > 0);
+        assert!(perform(&mut e, "A", r#"{"op":"no-such-op"}"#).is_err());
+        assert!(perform(&mut e, "A", "not json").is_err());
+    }
+
+    #[test]
+    fn a_master_fx_slider_changes_what_sounds() {
+        let (mut a, mut ra) = playing();
+        let (mut b, mut rb) = playing();
+        // the low-pass slider all the way down on one of two identical decks
+        assert_eq!(perform(&mut b, "A", r#"{"op":"masterFx","key":"lp-freq","value":0}"#).unwrap(), "done");
+        let blocks = 48_000 / QUANTUM;
+        let (x, y) = (run(&mut a, &mut ra, blocks), run(&mut b, &mut rb, blocks));
+        assert!(peak(&x) > 0.01);
+        assert!(x != y, "the lp-freq slider did nothing");
+    }
+
+    #[test]
+    fn engagements_latch_show_and_let_go() {
+        let (mut e, mut r) = playing();
+        run(&mut e, &mut r, 8);
+        let cat = parse(&catalogue_json()).unwrap();
+        let id = cat.as_array().unwrap().iter()
+            .find(|r| r.get("latchable").and_then(JsonValue::as_bool) == Some(true))
+            .and_then(|r| r.get("id")?.as_str()).unwrap().to_string();
+        let id = id.as_str();
+        engage(&mut e, "A", id, "latch").unwrap();
+        let st = parse(&fx_state_json(&e, "A")).unwrap();
+        let rows = st.as_array().unwrap();
+        assert!(rows.iter().any(|s| s.get("id").and_then(JsonValue::as_str) == Some(id)), "{st:?}");
+        run(&mut e, &mut r, 48_000 * 3 / QUANTUM); // past its bar
+        let st = parse(&fx_state_json(&e, "A")).unwrap();
+        let s = st.as_array().unwrap().iter().find(|s| s.get("id").and_then(JsonValue::as_str) == Some(id)).cloned();
+        assert_eq!(s.and_then(|s| s.get("latched").and_then(JsonValue::as_bool)), Some(true));
+        e.release("A", id).unwrap();
+        assert!(!fx_state_json(&e, "A").contains(&alloc::format!("\"{id}\"")));
+        assert!(engage(&mut e, "A", "no-such-effect", "latch").is_err());
+        assert!(engagement("0").is_err());
+        assert_eq!(engagement("bars:2").unwrap(), crate::host::deck::engage::Engagement::Bars(2));
+    }
+
+    /// Every macro in beats' catalogue (`public/lib/macros/catalog.js`) but the Beats pads
+    /// (`hit1`…`hit4`, which are stingers) fires on a playing deck.
+    #[test]
+    fn every_beats_macro_fires() {
+        let (mut e, mut r) = playing();
+        run(&mut e, &mut r, 8);
+        assert!(fire_macro(&mut e, "A", "no-such-macro", 2).is_err());
+        for id in [
+            "auto-pan", "beat-repeat", "breakdown", "build-crush", "cathedral", "cut", "delay-throw",
+            "double-drop", "drop", "dub-delay", "feel-ambient", "feel-build", "feel-chill", "feel-drive",
+            "feel-euphoric", "feel-reset", "feel-wind-down", "filter-res", "half-time", "hard-left",
+            "hard-right", "loosen", "mono", "octave-down", "octave-up", "phaser-drone", "ping-pong",
+            "pitch-bend", "pulse", "reverb-wash", "riser", "solo-drums", "sweep-hp", "sweep-lp",
+            "tape-stop", "tempo-anchor", "tighten", "vinyl-brake",
+        ] {
+            assert_eq!(fire_macro(&mut e, "A", id, 2).unwrap(), "done", "{id}");
+            run(&mut e, &mut r, 4);
+        }
+    }
+
+    #[test]
+    fn a_strip_voice_tweak_is_set_kept_and_cleared() {
+        let (mut e, mut r) = playing();
+        run(&mut e, &mut r, 8);
+        let ch = (1..=16)
+            .find(|&c| e.channel_voice("A", c).is_some_and(|v| v.tonal))
+            .expect("a tonal channel");
+        assert!(set_voice(&mut e, "A", ch, r#"{"gainDB":-12,"decayScale":2}"#).unwrap());
+        assert_eq!(e.voice_tweak("A", ch).get("gainDB"), Some(-12.0));
+        // one key changed, the other kept
+        assert!(set_voice(&mut e, "A", ch, r#"{"gainDB":-6}"#).unwrap());
+        assert_eq!(e.voice_tweak("A", ch).get("gainDB"), Some(-6.0));
+        assert_eq!(e.voice_tweak("A", ch).get("decayScale"), Some(2.0));
+        // null is the instrument's own again
+        assert!(set_voice(&mut e, "A", ch, r#"{"gainDB":null,"decayScale":null}"#).unwrap());
+        assert!(e.voice_tweak("A", ch).is_empty());
+        // decayMul scales the instrument's own decay; 1 is the instrument's own again
+        let base = e.channel_voice("A", ch).unwrap().voice.decay_scale;
+        assert!(set_voice(&mut e, "A", ch, r#"{"decayMul":2}"#).unwrap());
+        let got = e.voice_tweak("A", ch).get("decayScale").unwrap();
+        assert!((got - (base * 2.0).clamp(0.05, 20.0)).abs() < 1e-9, "{got} vs {base} x 2");
+        assert!(set_voice(&mut e, "A", ch, r#"{"decayMul":1}"#).unwrap());
+        assert!(e.voice_tweak("A", ch).is_empty());
+        assert!(set_voice(&mut e, "A", ch, "[1]").is_err());
+        assert!(set_voice(&mut e, "A", ch, r#"{"gainDB":"loud"}"#).is_err());
+    }
+
+    #[test]
+    fn a_stinger_fires_by_number() {
+        let (mut e, mut r) = playing();
+        run(&mut e, &mut r, 8);
+        let got = perform(&mut e, "A", r#"{"op":"stinger","n":1}"#).unwrap();
+        assert!(got == "done" || got.starts_with("ignored"), "{got}");
     }
 }

@@ -425,6 +425,45 @@ impl Dj {
         Ok(self.events[i].read(&self.engine, deck, marking))
     }
 
+    /// Any deck action as JSON (`{"op":"masterFx","key":"hp-freq","value":40}`,
+    /// `{"op":"stinger","n":1}`, `{"op":"fxReset"}`, …) on `deck` ([`beats::perform`]).
+    /// `"done"`, or why it did not run.
+    pub fn perform(&mut self, deck: &str, action: &str) -> Result<String, JsError> {
+        let deck = deck_name(deck)?;
+        beats::perform(&mut self.engine, deck, action).map_err(|e| JsError::new(&e))
+    }
+
+    /// Fire beats macro `id` on `deck` for `bars` (0: its own length) ([`beats::fire_macro`]).
+    pub fn fire_macro(&mut self, deck: &str, id: &str, bars: f64) -> Result<String, JsError> {
+        let deck = deck_name(deck)?;
+        beats::fire_macro(&mut self.engine, deck, id, bars as i32).map_err(|e| JsError::new(&e))
+    }
+
+    /// Engage catalogue effect `id` on `deck`'s next bar: `mode` is `momentary`, `latch` or a
+    /// number of bars ([`beats::engage`]).
+    pub fn engage(&mut self, deck: &str, id: &str, mode: &str) -> Result<(), JsError> {
+        let deck = deck_name(deck)?;
+        beats::engage(&mut self.engine, deck, id, mode).map_err(|e| JsError::new(&e))
+    }
+
+    /// Let go of an engaged effect on `deck` (a pad lifted, a latch undone).
+    pub fn release(&mut self, deck: &str, id: &str) -> Result<(), JsError> {
+        let deck = deck_name(deck)?;
+        self.engine.release(deck, id).map_err(|e| JsError::new(&e))
+    }
+
+    /// What is engaged on `deck` now, as JSON ([`beats::fx_state_json`]).
+    pub fn fx_state(&self, deck: &str) -> Result<String, JsError> {
+        let deck = deck_name(deck)?;
+        Ok(beats::fx_state_json(&self.engine, deck))
+    }
+
+    /// A mixer strip's voice tweak on `deck`'s MIDI `channel` ([`beats::set_voice`]).
+    pub fn set_voice(&mut self, deck: &str, channel: f64, tweak: &str) -> Result<bool, JsError> {
+        let deck = deck_name(deck)?;
+        beats::set_voice(&mut self.engine, deck, channel as i64, tweak).map_err(|e| JsError::new(&e))
+    }
+
     // MARK: whole-session snapshots (schema/dj-snapshot.v1.schema.json, docs/SNAPSHOTS.md)
 
     /// The session now, as canonical `DjSnapshot` JSON (the bytes its CID hashes).
@@ -600,6 +639,12 @@ impl DjComposer {
 #[wasm_bindgen]
 pub fn engine_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Every effect `Dj.engage` takes, as JSON ([`beats::catalogue_json`]).
+#[wasm_bindgen]
+pub fn effects_catalogue() -> String {
+    beats::catalogue_json()
 }
 
 /// Render `seconds` of a share envelope or beats project at `sample_rate` with no AudioContext:

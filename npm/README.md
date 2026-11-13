@@ -5,7 +5,7 @@ crate's `wasm` feature. It is the engine that [beats.bitwrap.io](https://beats.b
 
 ```js
 // from a CDN, pinned (the inline build carries its own wasm: no second request)
-import { Dj } from 'https://cdn.jsdelivr.net/npm/djrust@0.1.0/djrust.inline.js';
+import { Dj } from 'https://cdn.jsdelivr.net/npm/djrust@0.2.0/djrust.inline.js';
 
 const dj = new Dj(sampleRate);           // inside an AudioWorkletProcessor
 dj.compose('A', 'house', 7, 'standard'); // genre, seed, structure ('' or 'loop': none)

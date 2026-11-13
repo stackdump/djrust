@@ -63,7 +63,7 @@ module (`djrust/split`: glue plus `djrust_bg.wasm`) and an inline one (the defau
 embedded, so an AudioWorklet or a CDN `<script type=module>` needs no second request):
 
 ```js
-import { Dj } from 'https://cdn.jsdelivr.net/npm/djrust@0.1.0/djrust.inline.js';
+import { Dj } from 'https://cdn.jsdelivr.net/npm/djrust@0.2.0/djrust.inline.js';
 ```
 
 To link the facade into your own wasm crate, depend on `djrust` with
