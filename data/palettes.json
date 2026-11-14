@@ -192,6 +192,22 @@
         "arp": ["bank:minecraft.mallet"],
         "stinger": ["bank:minecraft.fx"]
       }
+    },
+    "toybox": {
+      "label": "Toy Box",
+      "icon": "🧸",
+      "color": "#E8A33D",
+      "description": "Plucked harps, thumpy bass, bells, chimes and mallets, a chip square, a little horn and a tiny kit: an original toy-like bank, synthesized by djrust (toybox.sf2).",
+      "neighbours": ["chiptune", "minecraft", "retro"],
+      "roles": {
+        "kit": ["bank:toybox.kit"],
+        "bass": ["bank:toybox.bass"],
+        "melody": ["bank:toybox.lead"],
+        "harmony": ["bank:toybox.pad"],
+        "pad": ["bank:toybox.pad"],
+        "arp": ["bank:toybox.mallet"],
+        "stinger": ["bank:toybox.fx"]
+      }
     }
   }
 }

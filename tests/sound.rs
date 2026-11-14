@@ -26,8 +26,8 @@ fn minecraft() -> MinecraftSidecar {
     }
 }
 
-/// A machine with the floor SoundFont, one more bank with kits, Apple's GM bank and the
-/// Minecraft bank.
+/// A machine with the floor SoundFont, one more bank with kits, Apple's GM bank, the
+/// Minecraft bank and the Toy Box bank.
 fn full() -> Installed {
     Installed {
         dir: "/sf".into(),
@@ -35,6 +35,7 @@ fn full() -> Installed {
             "MuseScore_General.sf2".into(),
             "minecraft-local.sf2".into(),
             "Kits.sf2".into(),
+            "toybox.sf2".into(),
         ],
         gm_bank: true,
         kits: vec![],
@@ -58,7 +59,7 @@ fn the_shipped_palettes_are_well_formed() {
     let set = PaletteSet::shared();
     let all = &set.palettes;
     assert!(
-        (8..=13).contains(&all.len()),
+        (8..=14).contains(&all.len()),
         "{:?}",
         all.iter().map(|p| &p.id).collect::<Vec<_>>()
     );

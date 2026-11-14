@@ -1,12 +1,14 @@
 //! `SF2Writer` (`Audio/MinecraftBank.swift`): a minimal SoundFont 2 writer, mono 16-bit
 //! samples and one instrument per preset. The bytes are a pure function of the calls, so the
-//! same assets build the same bank.
+//! same assets build the same bank. Shared by the Minecraft importer
+//! ([`crate::sound::minecraft`], which re-exports it as `minecraft::sf2`) and the synthesized
+//! Toy Box bank ([`crate::sound::toybox`]).
 
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::ops::{Range, RangeInclusive};
 
-use super::import::SAMPLE_RATE;
+use super::minecraft::import::SAMPLE_RATE;
 
 /// `SF2Writer.Zone`: one key range of a preset's instrument.
 #[derive(Clone, Debug, PartialEq)]
@@ -52,6 +54,8 @@ pub struct Sf2Writer {
     shdr: Vec<u8>,
     sample_count: usize,
     presets: Vec<(String, i64, Vec<Zone>)>,
+    /// Every sample's rate, Hz (the `shdr` `dwSampleRate`).
+    sample_rate: u32,
 }
 
 fn le16(d: &mut Vec<u8>, v: u16) {
@@ -98,14 +102,20 @@ fn signed(v: i64) -> u16 {
 }
 
 impl Sf2Writer {
-    /// `SF2Writer(name:)`.
+    /// `SF2Writer(name:)`: samples at [`SAMPLE_RATE`] (44.1 kHz).
     pub fn new(name: &str) -> Sf2Writer {
+        Sf2Writer::with_sample_rate(name, SAMPLE_RATE as u32)
+    }
+
+    /// A writer whose samples are all at `sample_rate` Hz.
+    pub fn with_sample_rate(name: &str, sample_rate: u32) -> Sf2Writer {
         Sf2Writer {
             name: name.into(),
             smpl: Vec::new(),
             shdr: Vec::new(),
             sample_count: 0,
             presets: Vec::new(),
+            sample_rate,
         }
     }
 
@@ -136,7 +146,7 @@ impl Sf2Writer {
             .map_or(start.max(end.saturating_sub(1)), |r| start + r.end as u32);
         let mut h = Vec::with_capacity(46);
         fixed(&mut h, name, 20);
-        for v in [start, end, ls, le, SAMPLE_RATE as u32] {
+        for v in [start, end, ls, le, self.sample_rate] {
             le32(&mut h, v);
         }
         h.push(root.clamp(0, 255) as u8);

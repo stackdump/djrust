@@ -505,7 +505,10 @@ fn every_genre_walks_as_swift_does() {
         }
         plain_genre_hops += rows(g, "plainGenre").len();
     }
-    assert!(plain_genre_hops >= 30, "{plain_genre_hops} plain genre hops");
+    assert!(
+        plain_genre_hops >= 30,
+        "{plain_genre_hops} plain genre hops"
+    );
     d.finish("wander genres golden");
 }
 
@@ -1030,9 +1033,12 @@ fn the_palette_table_and_the_hops_match_swift() {
     let mut d = Diffs::default();
     d.eq(
         "palette ids".to_string(),
+        // the Toy Box palette is djrust's own (its bank is synthesized by `sound::toybox`):
+        // the Swift dump predates it
         set.palettes
             .iter()
             .map(|p| p.id.clone())
+            .filter(|id| id != "toybox")
             .collect::<Vec<_>>(),
         table.iter().map(|p| s(p, "id").to_string()).collect(),
     );

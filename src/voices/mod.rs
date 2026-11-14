@@ -144,12 +144,22 @@ impl SamplerSource {
         matches!(self, SamplerSource::Kit { .. })
     }
 
-    /// From a bank that is only ever played on this machine (`localOnlyBanks`): level-checked
-    /// on load but not tuning-checked.
+    /// From a bank that is only ever played on this machine (`localOnlyBanks`).
     pub fn is_local_only(&self) -> bool {
         match self {
             SamplerSource::Sf2(p, _) | SamplerSource::Kit { path: p, .. } => {
                 LOCAL_ONLY_BANKS.contains(&last_component(p))
+            }
+            SamplerSource::Exs(_) | SamplerSource::Gm(_) => false,
+        }
+    }
+
+    /// From a bank played only by name ([`NAMED_ONLY_BANKS`]): level-checked on load but not
+    /// tuning-checked.
+    pub fn is_named_only(&self) -> bool {
+        match self {
+            SamplerSource::Sf2(p, _) | SamplerSource::Kit { path: p, .. } => {
+                NAMED_ONLY_BANKS.contains(&last_component(p))
             }
             SamplerSource::Exs(_) | SamplerSource::Gm(_) => false,
         }
@@ -182,6 +192,13 @@ pub const FLOOR_SOUND_FONT: &str = "MuseScore_General.sf2";
 /// `gm` programs: they are played only by name (`SamplerSource.localOnlyBanks`).
 pub const LOCAL_ONLY_BANKS: [&str; 1] = ["minecraft-local.sf2"];
 
+/// Banks in the SoundFont folder played only by name (a palette's `bank:` categories), never as
+/// General MIDI: the local-only ones and the synthesized Toy Box bank (`toybox.sf2`, which is
+/// ours and publishable, but whose program numbers are not GM's). They never join
+/// [`sound_fonts_in`], and the sampler level-checks but does not tuning-check them (their
+/// effects are unpitched).
+pub const NAMED_ONLY_BANKS: [&str; 2] = ["minecraft-local.sf2", "toybox.sf2"];
+
 /// Bank files whose sounds a published set may not play (`SamplerSource.localOnlyFiles`).
 pub fn local_only_files() -> BTreeSet<&'static str> {
     let mut s: BTreeSet<&'static str> = LOCAL_ONLY_BANKS.into_iter().collect();
@@ -190,12 +207,13 @@ pub fn local_only_files() -> BTreeSet<&'static str> {
 }
 
 /// The .sf2 banks among `names` (the SoundFont folder's listing), in the order voicing
-/// tries them: others by name, then [`FLOOR_SOUND_FONT`] last. Local-only banks never join.
+/// tries them: others by name, then [`FLOOR_SOUND_FONT`] last. Banks played only by name
+/// ([`NAMED_ONLY_BANKS`]: the local-only ones, the Toy Box) never join.
 /// `SamplerSource.soundFonts(in:)`, with the directory listing passed in.
 pub fn sound_fonts_in(dir: &str, names: &[String]) -> Vec<String> {
     let mut v: Vec<&String> = names
         .iter()
-        .filter(|n| n.to_lowercase().ends_with(".sf2") && !LOCAL_ONLY_BANKS.contains(&n.as_str()))
+        .filter(|n| n.to_lowercase().ends_with(".sf2") && !NAMED_ONLY_BANKS.contains(&n.as_str()))
         .collect();
     v.sort_by(|a, b| {
         ((a.as_str() == FLOOR_SOUND_FONT) as u8, a.as_str())

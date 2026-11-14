@@ -15,11 +15,11 @@
 mod common;
 use common::*;
 use djrust::json::JsonValue;
+use djrust::sound::stinger::StingerContent;
 use djrust::sound::{
     option_label, sources_for_option, unavailable_reason_option, Installed, MinecraftSidecar,
     PaletteCard, PaletteSet, Sounds,
 };
-use djrust::sound::stinger::StingerContent;
 use djrust::voices::{CatalogSound, SamplerSource, VoiceCatalog};
 use djrust::wander::deck::resolved_project_stingers;
 use djrust::TrackSpec;
@@ -97,11 +97,8 @@ fn source_list(v: Option<Vec<SamplerSource>>) -> Option<Vec<String>> {
 }
 
 fn golden_list(v: &JsonValue) -> Option<Vec<String>> {
-    v.as_array().map(|a| {
-        a.iter()
-            .map(|x| x.as_str().unwrap().to_string())
-            .collect()
-    })
+    v.as_array()
+        .map(|a| a.iter().map(|x| x.as_str().unwrap().to_string()).collect())
 }
 
 /// `SoundPalette.unavailableReason`, `roleReport`, `isPlayable`, `kit`, `kit(for:)`, `isLocalOnly`,
@@ -117,10 +114,16 @@ fn the_palette_api_matches_swift() {
         let sc = s(r, "scenario");
         let w = &worlds[sc];
         let id = s(r, "id");
-        let p = set.named(Some(id)).unwrap_or_else(|| panic!("no palette {id}"));
+        let p = set
+            .named(Some(id))
+            .unwrap_or_else(|| panic!("no palette {id}"));
         let ctx = w.sounds();
         let tag = format!("{sc} {id}");
-        d.eq(format!("{tag} unavailable"), p.unavailable_reason(set, ctx), opt(r, "unavailable"));
+        d.eq(
+            format!("{tag} unavailable"),
+            p.unavailable_reason(set, ctx),
+            opt(r, "unavailable"),
+        );
         let report: Vec<(String, Option<String>)> = r
             .get("roleReport")
             .unwrap()
@@ -129,7 +132,10 @@ fn the_palette_api_matches_swift() {
             .iter()
             .map(|e| {
                 let e = e.as_array().unwrap();
-                (e[0].as_str().unwrap().to_string(), e[1].as_str().map(String::from))
+                (
+                    e[0].as_str().unwrap().to_string(),
+                    e[1].as_str().map(String::from),
+                )
             })
             .collect();
         d.eq(format!("{tag} roleReport"), p.role_report(set, ctx), report);
@@ -139,7 +145,11 @@ fn the_palette_api_matches_swift() {
             r.get("playable").and_then(JsonValue::as_bool).unwrap(),
         );
         d.eq(format!("{tag} kit"), p.kit(set), opt(r, "kit"));
-        d.eq(format!("{tag} kit(for:)"), set.kit_for(Some(id), ctx), opt(r, "kitFor"));
+        d.eq(
+            format!("{tag} kit(for:)"),
+            set.kit_for(Some(id), ctx),
+            opt(r, "kitFor"),
+        );
         d.eq(
             format!("{tag} localOnly"),
             p.is_local_only(set),
@@ -153,7 +163,11 @@ fn the_palette_api_matches_swift() {
         for pick in r.get("picks").unwrap().as_array().unwrap() {
             let (role, seed) = (s(pick, "role"), f(pick, "seed"));
             let t = format!("{tag} {role} seed {seed}");
-            d.eq(format!("{t} pick"), p.pick(role, role, seed, set, ctx), opt(pick, "pick"));
+            d.eq(
+                format!("{t} pick"),
+                p.pick(role, role, seed, set, ctx),
+                opt(pick, "pick"),
+            );
             d.eq(
                 format!("{t} sources"),
                 source_list(p.sources(role, seed, set, ctx)),
@@ -221,7 +235,13 @@ fn the_palette_cards_match_swift() {
     for r in rows(&doc, "cards") {
         let sc = s(r, "scenario");
         let current = opt(r, "current");
-        let got = PaletteCard::cards(set, current.as_deref(), worlds[sc].sounds());
+        // the Toy Box palette is djrust's own (its bank is synthesized by `sound::toybox`):
+        // the Swift dump predates it
+        let got: Vec<PaletteCard> =
+            PaletteCard::cards(set, current.as_deref(), worlds[sc].sounds())
+                .into_iter()
+                .filter(|c| c.id != "toybox")
+                .collect();
         let want = r.get("cards").unwrap().as_array().unwrap();
         d.eq(format!("{sc} {current:?} count"), got.len(), want.len());
         for (g, w) in got.iter().zip(want) {
@@ -230,8 +250,16 @@ fn the_palette_cards_match_swift() {
             d.eq(format!("{tag} label"), g.label.as_str(), s(w, "label"));
             d.eq(format!("{tag} icon"), g.icon.as_str(), s(w, "icon"));
             d.eq(format!("{tag} color"), g.color.as_str(), s(w, "color"));
-            d.eq(format!("{tag} description"), g.description.as_str(), s(w, "description"));
-            d.eq(format!("{tag} unavailable"), g.unavailable.clone(), opt(w, "unavailable"));
+            d.eq(
+                format!("{tag} description"),
+                g.description.as_str(),
+                s(w, "description"),
+            );
+            d.eq(
+                format!("{tag} unavailable"),
+                g.unavailable.clone(),
+                opt(w, "unavailable"),
+            );
             d.eq(
                 format!("{tag} localOnly"),
                 g.local_only,
@@ -267,10 +295,11 @@ fn the_here_policy_resolves_the_hits_as_swift_does() {
         }
         let project = spec.project_in(w.sounds());
         let content = StingerContent::here(set, w.sounds(), vec![]);
-        let hits: Vec<String> = resolved_project_stingers(&project, set, genre, spec.seed, &content)
-            .iter()
-            .map(|a| a.json().js_stringified())
-            .collect();
+        let hits: Vec<String> =
+            resolved_project_stingers(&project, set, genre, spec.seed, &content)
+                .iter()
+                .map(|a| a.json().js_stringified())
+                .collect();
         d.eq(
             format!("{sc} {genre} {palette:?}"),
             hits,
@@ -318,7 +347,11 @@ fn next_version_matches_swift_on_negative_ties() {
         .map(|r| (f(r, "seed"), f(r, "next")))
         .filter(|(seed, _)| *seed < 0.0 && seed.fract() == -0.5)
         .collect();
-    assert_eq!(ties.len(), 5, "the five negative ties are in the dump: {ties:?}");
+    assert_eq!(
+        ties.len(),
+        5,
+        "the five negative ties are in the dump: {ties:?}"
+    );
     for (seed, next) in ties {
         assert_eq!(
             TrackSpec::new("house", seed, None).next_version().seed,

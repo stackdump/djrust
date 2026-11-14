@@ -68,7 +68,7 @@
     "sitar": "ethnic"
   },
   "bankCategories": {
-    "comment": "Categories played from one local bank by program name (a palette option `bank:<name>`, Resources/voices/palettes.json): the Minecraft palette's, from minecraft-local.sf2, which `make minecraft` builds on this Mac from the user's own game assets (never committed, shipped or published). `kit` names a kit preset's program instead of sounds.",
+    "comment": "Categories played from one local bank by program name (a palette option `bank:<name>`, Resources/voices/palettes.json): the Minecraft palette's, from minecraft-local.sf2, which `make minecraft` builds on this Mac from the user's own game assets (never committed, shipped or published); and the Toy Box palette's, from toybox.sf2, a bank synthesized by djrust (`sound::toybox::build`) and publishable. `kit` names a kit preset's program instead of sounds.",
     "minecraft.bass": { "bank": "minecraft-local.sf2", "sounds": ["bassattack", "didgeridoo", "guitar"] },
     "minecraft.lead": {
       "bank": "minecraft-local.sf2", "sounds": ["harp2", "pling", "bit", "flute", "banjo", "trumpet"]
@@ -86,6 +86,20 @@
         "goat_horn_call4", "goat_horn_call5", "goat_horn_call6", "goat_horn_call7", "bell_use",
         "bell_resonate", "amethyst_shimmer", "anvil_land", "orb"
       ]
+    },
+    "toybox.bass": { "bank": "toybox.sf2", "sounds": ["thump-bass", "reed-drone", "nylon-pick"] },
+    "toybox.lead": {
+      "bank": "toybox.sf2",
+      "sounds": ["pluck-harp", "glass-tine", "chip-square", "reed-flute", "twang", "toy-horn"]
+    },
+    "toybox.pad": { "bank": "toybox.sf2", "sounds": ["pluck-harp", "nylon-pick", "glass-tine"] },
+    "toybox.mallet": {
+      "bank": "toybox.sf2",
+      "sounds": ["bright-bell", "ice-chimes", "wood-mallet", "steel-mallet", "clank-bell"]
+    },
+    "toybox.kit": { "bank": "toybox.sf2", "kit": 127 },
+    "toybox.fx": {
+      "bank": "toybox.sf2", "sounds": ["rise-sweep", "sparkle", "thud", "coin-blip", "horn-call"]
     }
   }
 }

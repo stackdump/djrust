@@ -12,7 +12,9 @@
 
 pub mod minecraft;
 pub mod role_sounds;
+pub mod sf2;
 pub mod stinger;
+pub mod toybox;
 
 pub use role_sounds::{playing_palette, role_sounds, RoleSoundChoice, RoleSoundRow};
 
@@ -368,7 +370,9 @@ pub use crate::wave::synth::{is_drum_channel, is_synth_drum_kit};
 /// A beats instrument the synth engine voices (its own table or its families' words)
 /// (`SoundPalette.knownInstrument`).
 pub fn known_instrument(name: &str, catalog: &VoiceCatalog) -> bool {
-    if InstrumentTable::shared().entries.contains_key(name) || catalog.category_of.contains_key(name) {
+    if InstrumentTable::shared().entries.contains_key(name)
+        || catalog.category_of.contains_key(name)
+    {
         return true;
     }
     let t = BeatsTables::shared();
@@ -649,6 +653,35 @@ pub fn unavailable_reason_option(
     Some(format!("unknown option {option}"))
 }
 
+/// A program of a bank played by name (`bank:` categories): the Minecraft bank's or the Toy
+/// Box's, by sound name.
+pub fn bank_program_named(bank: &str, name: &str) -> Option<i64> {
+    if bank == minecraft::FILE_NAME {
+        minecraft::program_named(name)
+    } else if bank == toybox::FILE_NAME {
+        toybox::program_named(name)
+    } else {
+        None
+    }
+}
+
+/// The sound name of program `program` of a bank played by name.
+pub fn bank_program_name(bank: &str, program: i64) -> Option<String> {
+    if bank == minecraft::FILE_NAME {
+        minecraft::programs()
+            .into_iter()
+            .find(|(_, p)| *p == program)
+            .map(|(n, _)| n)
+    } else if bank == toybox::FILE_NAME {
+        toybox::programs()
+            .iter()
+            .find(|p| p.program == program)
+            .map(|p| p.name.to_string())
+    } else {
+        None
+    }
+}
+
 /// `SoundPalette.bankReason`.
 fn bank_reason(bank: &str, inst: &Installed) -> Option<String> {
     if bank == minecraft::FILE_NAME {
@@ -725,13 +758,7 @@ pub fn sources_for_option(
                 .sounds
                 .iter()
                 .filter(|n| built.map(|b| b.contains(n)).unwrap_or(true))
-                .filter_map(|name| {
-                    if c.bank == minecraft::FILE_NAME {
-                        minecraft::program_named(name)
-                    } else {
-                        None
-                    }
-                })
+                .filter_map(|name| bank_program_named(&c.bank, name))
                 .collect();
             if programs.is_empty() {
                 return None;
@@ -813,7 +840,7 @@ pub fn option_label(set: &PaletteSet, option: &str, role: &str, seed: f64, ctx: 
         if let Some(SamplerSource::Sf2(_, prog)) =
             sources_for_option(set, option, role, seed, ctx).and_then(|v| v.into_iter().next())
         {
-            if let Some((name, _)) = minecraft::programs().into_iter().find(|(_, p)| *p == prog) {
+            if let Some(name) = bank_program_name(&b.bank, prog) {
                 return name;
             }
         }
@@ -1139,7 +1166,8 @@ impl PaletteCard {
     /// wrapping (the chooser's arrow keys; `soundPrev` / `soundNext`). None when no other card
     /// can play. With none lit, +1 is the first playable card and -1 the last.
     pub fn step(cards: &[PaletteCard], delta: i64) -> Option<String> {
-        let playable: Vec<&PaletteCard> = cards.iter().filter(|c| c.unavailable.is_none()).collect();
+        let playable: Vec<&PaletteCard> =
+            cards.iter().filter(|c| c.unavailable.is_none()).collect();
         let n = playable.len() as i64;
         if n == 0 || delta == 0 {
             return None;

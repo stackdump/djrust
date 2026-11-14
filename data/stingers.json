@@ -39,6 +39,7 @@
     {"id": "tubular-bells", "kind": "oneShot", "label": "Tubular bells", "option": "gm:14", "families": ["*"], "palettes": ["lofi"], "key": "tonal", "tempo": [0, 999]},
     {"id": "apple-orchestra-hit", "kind": "oneShot", "label": "Orchestra hit (Apple)", "option": "dls:55", "families": ["*"], "palettes": ["retro"], "key": "tonal", "tempo": [0, 999]},
     {"id": "minecraft-fx", "kind": "oneShot", "label": "Minecraft FX", "option": "bank:minecraft.fx", "families": ["*"], "palettes": ["minecraft"], "key": "any", "tempo": [0, 999]},
+    {"id": "toybox-fx", "kind": "oneShot", "label": "Toy Box FX", "option": "bank:toybox.fx", "families": ["*"], "palettes": ["toybox"], "key": "any", "tempo": [0, 999]},
 
     {"id": "drop", "kind": "macro", "label": "Drop", "macro": "drop", "families": ["club", "bass"], "palettes": ["*"], "key": "any", "tempo": [0, 999]},
     {"id": "beat-repeat", "kind": "macro", "label": "Beat repeat", "macro": "beat-repeat", "families": ["club", "bass", "retro"], "palettes": ["*"], "key": "any", "tempo": [0, 999]},

@@ -16,7 +16,8 @@
 
 pub mod assets;
 pub mod import;
-pub mod sf2;
+/// The SoundFont 2 writer, shared with the Toy Box bank (it lives in [`crate::sound::sf2`]).
+pub use super::sf2;
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;

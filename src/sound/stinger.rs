@@ -16,9 +16,9 @@ use alloc::vec::Vec;
 use once_cell::race::OnceBox;
 
 use super::{apply_sound, PaletteSet, SoundNet, Sounds};
+use crate::fx::MasterMacro;
 use crate::gen::core::scale_intervals;
 use crate::gen::tables::BeatsTables;
-use crate::fx::MasterMacro;
 use crate::json::{JsonObject, JsonValue};
 use crate::voices::{stable_hash, swift_double};
 use crate::wave::NetMacro;

@@ -37,7 +37,7 @@ pub struct HostLibrary {
     pub library: Option<std::sync::Arc<Library>>,
     /// General SoundFonts found (what a general-purpose palette draws on).
     pub sound_fonts: usize,
-    /// Banks beyond those: the local-only ones (`minecraft-local.sf2`).
+    /// Banks beyond those: the ones played only by name (`minecraft-local.sf2`, `toybox.sf2`).
     pub local_only: usize,
 }
 
@@ -96,7 +96,11 @@ pub fn sound_font_dirs_in(
     }
     if let Some(h) = &home {
         v.push(h.join("Library/Application Support/beats-btw-dj/soundfonts"));
-        v.push(h.join(concat!("Library/Application Support/", env!("DJRUST_FORMAT_NS"), "/soundfonts")));
+        v.push(h.join(concat!(
+            "Library/Application Support/",
+            env!("DJRUST_FORMAT_NS"),
+            "/soundfonts"
+        )));
     }
     v
 }
@@ -640,10 +644,7 @@ mod synth {
             let gain_db = 20.0 * self.gain.log10();
             let mut out = BTreeMap::new();
             for g in SamplerPartLevels::GROUPS {
-                out.insert(
-                    g.to_string(),
-                    raw[g] + gain_db - synth_level_db(g, sr),
-                );
+                out.insert(g.to_string(), raw[g] + gain_db - synth_level_db(g, sr));
             }
             self.part_level_db = out;
         }
@@ -870,7 +871,7 @@ mod synth {
             Sf2Sampler::open(source, sample_rate)
         };
         let mut inst = open().map_err(|e| format!("load failed: {e}"))?;
-        let tuning = !source.is_local_only();
+        let tuning = !source.is_named_only();
         let mut fits = source.is_kit() || inst.normalize(tuning);
         let silent = inst
             .last_check
