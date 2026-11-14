@@ -6,7 +6,9 @@
 //! ([`crate::host::audio::Input`]); the strip reads a block at a time. Clock drift between the input
 //! and output devices is handled the simple way: the strip waits until the ring holds
 //! [`target`](InputStrip) samples before it plays, skips ahead when the ring runs more than three
-//! targets full, and plays silence (counted) when it runs dry. Both devices must run at the same
+//! targets full, and plays silence (counted) when it runs dry. The target is at least the biggest
+//! block the output has asked for ([`InputMirror::block`]): an output whose callback is longer
+//! than the cushion would otherwise run the ring dry on every block. Both devices must run at the same
 //! nominal rate (the host opens the input at the output's rate); a resampler is future work.
 //! Real-time safe: every buffer is allocated up front.
 
@@ -114,6 +116,9 @@ pub struct InputMirror {
     pub skips: AtomicU64,
     /// Samples in the ring at the last block.
     pub fill: AtomicU32,
+    /// The biggest block the output has asked the strip for, in frames: the strip waits for at
+    /// least this many before it plays, so a feeder should keep the ring above it.
+    pub block: AtomicU32,
     /// The capture callback has delivered samples.
     pub live: AtomicBool,
     /// The history head's [`Mode`] code.
@@ -263,6 +268,8 @@ pub(crate) struct InputStrip {
     /// Frames the last [`pull`](Self::pull) filled, and whether it played (primed).
     pub(crate) pulled: usize,
     played: bool,
+    /// The biggest block pulled so far (see [`InputMirror::block`]).
+    block: usize,
 }
 
 impl InputStrip {
@@ -312,6 +319,7 @@ impl InputStrip {
             recall,
             pulled: 0,
             played: false,
+            block: 0,
         }
     }
 
@@ -373,6 +381,12 @@ impl InputStrip {
         let n = n.min(MAX_BLOCK);
         self.pulled = n;
         self.played = false;
+        if n > self.block {
+            self.block = n;
+            self.mirror.block.store(n as u32, Ordering::Relaxed);
+        }
+        // a block longer than the cushion would empty the ring every time: wait for a block
+        let target = self.target.max(self.block);
         let l = &mut self.l[..n];
         l.fill(0.0);
         let mut avail = self.rx.slots();
@@ -381,7 +395,7 @@ impl InputStrip {
             self.mirror.live.store(true, Ordering::Relaxed);
         }
         if !self.primed {
-            if avail < self.target {
+            if avail < target {
                 self.r[..n].fill(0.0);
                 // the recording keeps the strip's timeline: a block it did not play is silence
                 record_block(&mut self.rec, &self.mirror, frame, &self.l[..n]);
@@ -389,13 +403,13 @@ impl InputStrip {
             }
             self.primed = true;
         }
-        if avail > self.target * 3 {
+        if avail > target * 3 {
             // the input runs ahead of the output: drop back to the target
-            let skip = avail - self.target;
+            let skip = avail - target;
             if let Ok(c) = self.rx.read_chunk(skip) {
                 c.commit_all();
             }
-            avail = self.target;
+            avail = target;
             self.mirror.skips.fetch_add(1, Ordering::Relaxed);
         }
         let take = avail.min(n);
