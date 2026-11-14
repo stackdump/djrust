@@ -99,3 +99,36 @@ fn underruns_and_drift_are_counted() {
     assert!(m.fill.load(std::sync::atomic::Ordering::Relaxed) < 2_000);
     let _ = &mut e;
 }
+
+/// An output whose callback is longer than the strip's cushion (Android's AAudio may hand
+/// 2048+ frames at once): a feeder that keeps the ring a block plus a little ahead plays
+/// without a gap, and the strip says how big the block is.
+#[test]
+fn a_long_output_block_plays_without_dropouts() {
+    let (mut e, mut r, mut feed) = rig();
+    e.set_input_volume(0, 1.0);
+    let n = 2176;
+    let (mut l, mut rr) = (vec![0f32; n], vec![0f32; n]);
+    let m = e.inputs[0].mirror.clone();
+    let mut at = 0;
+    let mut quiet = 0;
+    for b in 0..60 {
+        // the feeder: up to one block (as soon as the strip has said how big) plus 512
+        let want = (m.block.load(std::sync::atomic::Ordering::Relaxed) as usize).max(1024) + 512;
+        let have = feed.buffer().capacity() - feed.slots();
+        if want > have {
+            tone(&mut feed, at, want - have, 0.5, 0.0);
+            at += want - have;
+        }
+        r.render_block(&mut l, &mut rr);
+        if b > 4 {
+            // no silent stretch inside a block (the sine's zero crossings are single samples)
+            quiet += l.windows(8).filter(|w| w.iter().all(|v| v.abs() < 1e-6)).count();
+        }
+    }
+    assert_eq!(m.block.load(std::sync::atomic::Ordering::Relaxed) as usize, n);
+    assert_eq!(m.skips.load(std::sync::atomic::Ordering::Relaxed), 0);
+    assert!(m.underruns.load(std::sync::atomic::Ordering::Relaxed) <= 1, "only the first block");
+    assert_eq!(quiet, 0, "gaps in the sound");
+    let _ = &mut e;
+}
