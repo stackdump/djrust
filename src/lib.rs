@@ -53,6 +53,7 @@ pub mod journal;
 pub mod json;
 pub mod layers;
 pub mod looplib;
+pub mod loopsets;
 pub mod loudness;
 pub mod mixer;
 pub mod musicality;
@@ -64,9 +65,9 @@ pub mod setplan;
 pub mod share;
 pub mod sound;
 pub mod spec;
+pub mod stretch;
 #[cfg(feature = "transfer")]
 pub mod transfer;
-pub mod stretch;
 pub mod voices;
 pub mod wander;
 pub mod wav;
