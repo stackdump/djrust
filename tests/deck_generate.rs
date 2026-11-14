@@ -1234,3 +1234,62 @@ fn a_mix_out_prepared_ahead_is_the_hand_mix_out() {
     assert_eq!(after.track_serial, before.track_serial);
     assert_eq!(after.tail, before.tail);
 }
+
+// A load through `perform` supersedes a `generate` still composing: the
+// user's track stays, the older request is let go of. Not Swift's behaviour (`loadNet` leaves
+// `Deck.generation` alone), so no Swift literal.
+#[test]
+fn a_load_through_perform_supersedes_a_pending_generate() {
+    use djrust::host::deck::PerformCtx;
+    use djrust::session::action::DeckAction;
+    use djrust::session::model::{DeckSource, DEMO_ID};
+
+    // a net load
+    let mut st = Stepper::new(RATE, true);
+    let pending =
+        st.e.begin_generate("A", &TrackSpec::new("dnb", 2.0, None), SwapStart::Top)
+            .unwrap();
+    let mine = TrackSpec::new("house", 7.0, Some("standard"));
+    let load = DeckAction::Load {
+        deck: "A".into(),
+        source: DeckSource::Net(mine.clone()),
+    };
+    st.e.perform(&load, PerformCtx::default());
+    assert_eq!(st.e.settle(0, true), vec![(pending, false)]);
+    assert_eq!(spec_of(&st, "A"), Some(mine));
+    assert!(st.e.deck("A").unwrap().track.seed_target.is_none());
+
+    // a sample load (the demo loop)
+    let mut st = Stepper::new(RATE, true);
+    let pending =
+        st.e.begin_generate("B", &TrackSpec::new("dnb", 2.0, None), SwapStart::Top)
+            .unwrap();
+    let load = DeckAction::Load {
+        deck: "B".into(),
+        source: DeckSource::Sample {
+            id: DEMO_ID.into(),
+            title: "demo".into(),
+            grid: None,
+        },
+    };
+    st.e.perform(&load, PerformCtx::default());
+    assert_eq!(st.e.settle(1, true), vec![(pending, false)]);
+    assert!(!st.e.deck("B").unwrap().is_net(), "the demo loop stays on B");
+
+    // a load that does not happen supersedes nothing
+    let mut st = Stepper::new(RATE, true);
+    let pending =
+        st.e.begin_generate("A", &TrackSpec::new("dnb", 2.0, None), SwapStart::Top)
+            .unwrap();
+    let nothing = DeckAction::Load {
+        deck: "A".into(),
+        source: DeckSource::Sample {
+            id: "not-in-the-library".into(),
+            title: "x".into(),
+            grid: None,
+        },
+    };
+    st.e.perform(&nothing, PerformCtx::default());
+    assert_eq!(st.e.settle(0, true), vec![(pending, true)]);
+    assert_eq!(spec_of(&st, "A").unwrap().genre, "dnb");
+}

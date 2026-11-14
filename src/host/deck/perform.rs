@@ -726,7 +726,9 @@ impl Engine {
                 };
                 match track {
                     Some(t) => {
-                        self.load_net(deck, t);
+                        if self.load_net(deck, t) {
+                            self.supersede_pending(deck);
+                        }
                         Applied::Done.into()
                     }
                     None => Applied::Ignored("not a net share").into(),
@@ -734,7 +736,9 @@ impl Engine {
             }
             DeckSource::Sample { id, title, grid } => {
                 if id == DEMO_ID {
-                    self.load_demo(deck);
+                    if self.load_demo(deck) {
+                        self.supersede_pending(deck);
+                    }
                     return Applied::Done.into();
                 }
                 // (the id the audio is known by: what perform named a buffer it was handed, else
@@ -767,7 +771,9 @@ impl Engine {
                     }
                     None => None,
                 };
-                self.load_sample(deck, PreparedSample::with_grid(b, title, grid));
+                if self.load_sample(deck, PreparedSample::with_grid(b, title, grid)) {
+                    self.supersede_pending(deck);
+                }
                 Outcome {
                     applied: Applied::Done,
                     grid,
