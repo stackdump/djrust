@@ -968,6 +968,7 @@ impl Engine {
     pub fn sync_trick_tempo(&mut self) {
         self.service_time_scale();
         self.service_engagements();
+        self.service_slot_engagements();
         // a riser that has run its length is over
         for d in self.decks.iter_mut() {
             if let Some(end) = d.tricks.riser_end {

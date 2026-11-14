@@ -99,6 +99,8 @@ pub enum Msg {
     Post(Option<Box<crate::fx::post::LivePost>>),
     /// An insert chain: installed once, then its switches and knobs ([`super::inserts`]).
     Insert(super::inserts::InsertSlot, super::inserts::InsertMsg),
+    /// A trick on a strip with no deck: an input strip or the master ([`super::slot_fx`]).
+    SlotTrick(super::slot_fx::TrickSlot, super::tricks::TrickMsg),
 }
 
 /// `Deck.trim`.
@@ -179,6 +181,9 @@ pub struct Renderer {
     post: super::post_bus::PostRender,
     /// The insert chains on the strips and the master ([`super::inserts`]).
     inserts: super::inserts::InsertRender,
+    /// Each input strip's tricks and the master's ([`super::slot_fx`]).
+    input_tricks: Vec<super::tricks::TrickChain>,
+    master_tricks: super::tricks::TrickChain,
 }
 
 /// What each part of the mixer added to the master, block by block, after the master level:
@@ -308,6 +313,14 @@ impl Renderer {
             Msg::Aux(m) => self.aux.apply(m, &mut self.strips),
             Msg::Post(p) => self.post.apply(p),
             Msg::Insert(slot, m) => self.inserts.apply(slot, m),
+            Msg::SlotTrick(slot, m) => match slot {
+                super::slot_fx::TrickSlot::Input(k) => {
+                    if let Some(t) = self.input_tricks.get_mut(k) {
+                        t.apply(m);
+                    }
+                }
+                super::slot_fx::TrickSlot::Master => self.master_tricks.apply(m),
+            },
             Msg::Audition(m) => {
                 if let Some(b) = self.audition.apply(m) {
                     if let Err(rtrb::PushError::Full(b)) = self.retire_buffers_tx.push(b) {
@@ -394,6 +407,21 @@ impl Renderer {
         }
         for s in self.inputs.iter_mut() {
             s.pull(n, self.frames);
+        }
+        // each input's tricks (super::slot_fx), before the vocoder taps it, as a deck's are
+        for k in 0..self.inputs.len().min(self.input_tricks.len()) {
+            let side = match self.input_tricks[k].side_source() {
+                Some(j) if j < self.strips.len() => {
+                    let src = &self.strips[j];
+                    for i in 0..n {
+                        self.side[i] = 0.5 * (src.l[i] + src.r[i]);
+                    }
+                    true
+                }
+                _ => false,
+            };
+            let s = &mut self.inputs[k];
+            self.input_tricks[k].process(&mut s.l[..n], &mut s.r[..n], self.frames, side.then_some(&self.side[..n]));
         }
         for k in 0..self.vocoders.len() {
             self.vocoder_pass(n, k);
@@ -603,7 +631,20 @@ impl Renderer {
         );
         // the post chain (off: nothing), before the master level so the fader still turns the
         // finished sound down
-        // the master's insert chain, before the post chain and the master level
+        // the master's tricks (super::slot_fx), then its insert chain, before the post chain and
+        // the master level
+        let side = match self.master_tricks.side_source() {
+            Some(j) if j < self.strips.len() => {
+                let src = &self.strips[j];
+                for i in 0..n {
+                    self.side[i] = 0.5 * (src.l[i] + src.r[i]);
+                }
+                true
+            }
+            _ => false,
+        };
+        self.master_tricks
+            .process(&mut out_l[..n], &mut out_r[..n], self.frames, side.then_some(&self.side[..n]));
         self.inserts.process(
             super::inserts::InsertSlot::Master,
             None,
@@ -1045,6 +1086,9 @@ pub struct Engine {
     pub aux_mirror: Arc<super::aux::AuxMirror>,
     /// The insert chains' settings (docs: [`super::inserts`]).
     pub inserts: super::inserts::InsertState,
+    /// What the main thread keeps of the input strips' and the master's tricks
+    /// ([`super::slot_fx`]).
+    pub(crate) slot_tricks: std::collections::BTreeMap<super::slot_fx::TrickSlot, super::tricks::DeckTricks>,
 }
 
 /// Build a mixer: the main-thread [`Engine`] and the render-thread [`Renderer`].
@@ -1226,6 +1270,8 @@ pub fn engine(config: EngineConfig) -> (Engine, Renderer) {
         ),
         post: super::post_bus::PostRender::new(config.sample_rate, retire_post_tx, post_mirror.clone()),
         inserts: super::inserts::InsertRender::new(config.decks.len(), config.inputs.len()),
+        input_tricks: (0..config.inputs.len()).map(|_| super::tricks::TrickChain::new(config.sample_rate)).collect(),
+        master_tricks: super::tricks::TrickChain::new(config.sample_rate),
     };
     let engine = Engine {
         sample_rate: config.sample_rate,
@@ -1288,6 +1334,7 @@ pub fn engine(config: EngineConfig) -> (Engine, Renderer) {
         aux: Default::default(),
         aux_mirror,
         inserts: Default::default(),
+        slot_tricks: Default::default(),
     };
     (engine, renderer)
 }

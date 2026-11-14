@@ -45,6 +45,7 @@ pub mod arrange_start;
 pub mod audition;
 pub mod aux;
 pub mod engage;
+pub mod slot_fx;
 pub mod post_bus;
 pub mod inserts;
 pub mod automix;
@@ -106,6 +107,7 @@ pub mod wander;
 pub use self::compose_job::{ComposeJob, ComposeJobs, Landed, Landing};
 pub use self::core::{Command, DeckCore, DeckMirror};
 pub use self::engage::{Engagement, FxState};
+pub use self::slot_fx::TrickSlot;
 pub use self::engine::{
     crossfade_gain, engine, trim_for_gain, Engine, EngineConfig, MainDeck, Msg,
     Prepared, Renderer, SectionInfo, Stems, MAX_BLOCK, ROLE_ORDER,
