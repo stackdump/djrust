@@ -759,8 +759,8 @@ pub struct TrackState {
     pub fixes: Option<Fixes>,
     /// Whether dj's pass rewrote the net (`passApplied`).
     pub pass_applied: bool,
-    /// Bumped by every `generate`, relocation and look-ahead hand-over: only the latest
-    /// request installs (`Deck.generation`).
+    /// Bumped by every `generate`, relocation and look-ahead hand-over, and by a load through
+    /// `perform`: only the latest request installs (`Deck.generation`).
     pub generation: u64,
     /// The spec `step_seed` last asked for, while it composes (None once any track loads), so
     /// a fast turn of the wheel counts every click from the seed it is heading to.
@@ -929,6 +929,18 @@ impl Engine {
         match self.index(deck) {
             Some(i) => self.load_net_at(i, track),
             None => false,
+        }
+    }
+
+    /// A track loaded by hand (a load through `perform`: a file, Compose, a share) supersedes
+    /// every request still composing or relocating for the deck, so a Wander swap or a seed
+    /// wheel's compose started before it is let go of instead of landing over it. Swift's
+    /// `loadNet` leaves `Deck.generation` alone; this is a deliberate difference.
+    pub(crate) fn supersede_pending(&mut self, deck: &str) {
+        if let Some(i) = self.index(deck) {
+            let t = &mut self.decks[i].track;
+            t.generation += 1;
+            t.seed_target = None;
         }
     }
 
