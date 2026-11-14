@@ -1,0 +1,33 @@
+# The `djwasm` npm package's cdylib: djrust as a plain C-ABI WebAssembly module (no wasm-bindgen),
+# the surface beats.bitwrap.io loads into an AudioWorklet. Packaging only (not on crates.io); its
+# version follows djrust's (cabi/build.sh stamps the npm package from the root Cargo.toml).
+[package]
+name = "djwasm"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+publish = false
+description = "djrust as a plain C-ABI WebAssembly module for an AudioWorklet (beats.bitwrap.io)"
+repository = "https://github.com/stackdump/djrust"
+
+[lib]
+# cdylib is the .wasm; rlib lets the native tests call the same exports.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+djrust = { path = "..", default-features = false }
+
+[workspace]
+
+[profile.test]
+opt-level = 2
+
+# Size first: the module is fetched by every visitor. One codegen unit and fat LTO also make the
+# bytes a function of the sources and the toolchain alone.
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -79,10 +79,10 @@ lto = "thin"
 opt-level = 3
 
 # The identity wallet is a second package in this workspace (crates/djrust-wallet). The engine
-# never depends on it. npm/ is its own workspace (the cdylib for the npm package).
+# never depends on it. npm/ and cabi/ are their own workspaces (the cdylibs for the two npm packages).
 [workspace]
 members = [".", "crates/djrust-wallet"]
-exclude = ["npm"]
+exclude = ["npm", "cabi"]
 
 [[example]]
 name = "boot_profile"

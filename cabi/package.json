@@ -1,0 +1,25 @@
+{
+  "name": "djwasm",
+  "version": "0.0.0",
+  "description": "djrust, the bitwrap audio engine, as a plain C-ABI WebAssembly module plus its JS glue: compose beats tracks and render them in an AudioWorklet, bit for bit the same on every browser. No wasm-bindgen, no bundler, no TextEncoder needed.",
+  "license": "MIT",
+  "homepage": "https://beats.bitwrap.io",
+  "repository": { "type": "git", "url": "git+https://github.com/stackdump/djrust.git", "directory": "cabi" },
+  "bugs": { "url": "https://github.com/stackdump/djrust/issues" },
+  "keywords": ["audio", "music", "beats", "audioworklet", "wasm", "webassembly", "petri-net"],
+  "type": "module",
+  "main": "./loader.js",
+  "module": "./loader.js",
+  "exports": {
+    ".": "./loader.js",
+    "./loader.js": "./loader.js",
+    "./worklet.js": "./worklet.js",
+    "./node.js": "./node.js",
+    "./djwasm.wasm": "./djwasm.wasm",
+    "./hashes.json": "./hashes.json",
+    "./package.json": "./package.json"
+  },
+  "files": ["djwasm.wasm", "loader.js", "worklet.js", "node.js", "hashes.json", "README.md", "LICENSE"],
+  "sideEffects": false,
+  "publishConfig": { "access": "public" }
+}
