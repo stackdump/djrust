@@ -28,6 +28,8 @@ pub enum InputMsg {
     TrimDb(f64),
     Volume(f64),
     Mute(bool),
+    /// Which side of the crossfader the strip is on: 0 neither (the default), 1 A, 2 B.
+    Xfade(u8),
     Pfl(bool),
     Strip(StripKnob, f64),
     /// The master tempo, for the history's window and the loop's speed.
@@ -257,6 +259,8 @@ pub(crate) struct InputStrip {
     eq: StripEq,
     volume: f64,
     mute: bool,
+    /// The crossfader side (see [`InputMsg::Xfade`]).
+    xfade: u8,
     pub(crate) pfl: bool,
     last_gain: f64,
     pub(crate) l: Vec<f32>,
@@ -309,6 +313,7 @@ impl InputStrip {
             eq: StripEq::new(sample_rate),
             volume: 0.8,
             mute: false,
+            xfade: 0,
             pfl: false,
             last_gain: 0.0,
             l: vec![0.0; MAX_BLOCK],
@@ -328,6 +333,7 @@ impl InputStrip {
             InputMsg::TrimDb(db) => self.trim = gain_of_db(db) as f32,
             InputMsg::Volume(v) => self.volume = v.clamp(0.0, 1.0),
             InputMsg::Mute(on) => self.mute = on,
+            InputMsg::Xfade(side) => self.xfade = side.min(2),
             InputMsg::Pfl(on) => self.pfl = on,
             InputMsg::Strip(k, v) => self.eq.set(k, v),
             m => {
@@ -369,7 +375,7 @@ impl InputStrip {
     #[allow(dead_code)]
     pub(crate) fn render(&mut self, out_l: &mut [f32], out_r: &mut [f32]) {
         self.pull(out_l.len(), 0);
-        self.mix(out_l, out_r, None);
+        self.mix(out_l, out_r, None, 0.5);
     }
 
     /// Fill `self.l` / `self.r` with the strip's next `n` frames, pre-fader (after the trim,
@@ -497,20 +503,26 @@ impl InputStrip {
         self.played = true;
     }
 
-    /// Add the pulled block, through the fader (ramped), into `out_l` / `out_r`. Nothing until
-    /// the ring has its cushion.
+    /// Add the pulled block, through the fader and the crossfader when the strip is on a side
+    /// (ramped), into `out_l` / `out_r`. Nothing until the ring has its cushion.
     pub(crate) fn mix(
         &mut self,
         out_l: &mut [f32],
         out_r: &mut [f32],
         aux: Option<(&mut [f32], &mut [f32], (f64, f64))>,
+        crossfader: f64,
     ) {
         if !self.played {
             return;
         }
         let mut aux = aux;
         let n = self.pulled.min(out_l.len()).min(out_r.len());
-        let target = if self.mute { 0.0 } else { self.volume };
+        let side = match self.xfade {
+            1 => super::engine::crossfade_gain("A", crossfader),
+            2 => super::engine::crossfade_gain("B", crossfader),
+            _ => 1.0,
+        };
+        let target = if self.mute { 0.0 } else { self.volume * side };
         let (g0, step) = (self.last_gain, (target - self.last_gain) / n.max(1) as f64);
         self.last_gain = target;
         let mut peak = 0f32;
@@ -549,6 +561,8 @@ pub struct MainInput {
     pub watch: InputWatch,
     /// The device feeding it, once one is attached.
     pub device: Option<String>,
+    /// The crossfader side: None (not on the crossfader, the default), `A` or `B`.
+    pub xfade: Option<char>,
     /// The history window now, in beats (None: this strip keeps no history).
     pub history_beats: Option<f64>,
     /// The loop length the LOOP button grabs, in beats.
@@ -580,6 +594,7 @@ impl MainInput {
             channel: Arc::new(AtomicU8::new(0)),
             watch: InputWatch::default(),
             device: None,
+            xfade: None,
             history_beats,
             loop_beats: history::DEFAULT_LOOP_BEATS,
             latency_ms: 0.0,
@@ -677,6 +692,25 @@ impl Engine {
         self.inputs
             .get(i)
             .map_or(0, |x| (x.latency_ms / 1000.0 * self.sample_rate).round() as i64)
+    }
+
+    /// Put input `i` on a side of the crossfader (`A` / `B`), or take it off (None): on a side
+    /// its fader is scaled as that deck's is (docs/HUB.md: A cos, B sin).
+    pub fn set_input_xfade(&mut self, i: usize, side: Option<char>) -> bool {
+        let side = side.map(|c| c.to_ascii_uppercase()).filter(|c| matches!(c, 'A' | 'B'));
+        match self.inputs.get_mut(i) {
+            Some(inp) => inp.xfade = side,
+            None => return false,
+        }
+        let text = side.map_or("off the crossfader".to_string(), |c| format!("crossfader {c}"));
+        let v = side.map_or(JsonValue::Null, |c| JsonValue::str(c.to_string()));
+        self.input_trace(i, "xfade", text, false, v);
+        let code = match side {
+            Some('A') => 1,
+            Some('B') => 2,
+            _ => 0,
+        };
+        self.input_send(i, InputMsg::Xfade(code))
     }
 
     pub fn set_input_trim(&mut self, i: usize, db: f64) -> bool {

@@ -132,3 +132,29 @@ fn a_long_output_block_plays_without_dropouts() {
     assert_eq!(quiet, 0, "gaps in the sound");
     let _ = &mut e;
 }
+
+#[test]
+fn an_input_on_the_crossfader_fades_with_its_side() {
+    let (mut e, mut r, mut feed) = rig();
+    e.set_input_volume(0, 1.0);
+    // off the crossfader (the default): the crossfader all the way to B changes nothing
+    e.set_crossfader(1.0);
+    let free = play(&mut e, &mut r, &mut feed, 200, 0.5, 0.0);
+    assert!((free - 0.1256).abs() < 0.01, "free {free}");
+    // on A: at B it is gone, at A it is whole, in the middle it is A's cos(π/4)
+    assert!(e.set_input_xfade(0, Some('a')));
+    assert_eq!(e.inputs[0].xfade, Some('A'));
+    let gone = play(&mut e, &mut r, &mut feed, 200, 0.5, 0.0);
+    assert!(gone < 1e-4, "on A with the crossfader at B: {gone}");
+    e.set_crossfader(0.0);
+    let whole = play(&mut e, &mut r, &mut feed, 200, 0.5, 0.0);
+    assert!((whole - free).abs() < 0.01, "{whole} vs {free}");
+    e.set_crossfader(0.5);
+    let half = play(&mut e, &mut r, &mut feed, 200, 0.5, 0.0);
+    assert!((half - free * std::f32::consts::FRAC_1_SQRT_2).abs() < 0.01, "{half}");
+    // off again
+    assert!(e.set_input_xfade(0, None));
+    e.set_crossfader(1.0);
+    let back = play(&mut e, &mut r, &mut feed, 200, 0.5, 0.0);
+    assert!((back - free).abs() < 0.01, "{back}");
+}

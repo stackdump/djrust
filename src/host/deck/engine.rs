@@ -583,6 +583,7 @@ impl Renderer {
                 &mut out_l[..n],
                 &mut out_r[..n],
                 Some((&mut self.aux.l[..n], &mut self.aux.r[..n], ramp)),
+                self.crossfader,
             );
             if ramp.0 != 0.0 || ramp.1 != 0.0 {
                 self.aux.sent = true;
