@@ -46,6 +46,7 @@ pub mod audition;
 pub mod aux;
 pub mod engage;
 pub mod post_bus;
+pub mod inserts;
 pub mod automix;
 pub mod bar_next;
 pub mod copy;

@@ -97,6 +97,8 @@ pub enum Msg {
     /// The live post chain on the master (None: off), built on the main thread; the one it
     /// replaces goes back through the post retire ring (docs/POST.md).
     Post(Option<Box<crate::fx::post::LivePost>>),
+    /// An insert chain: installed once, then its switches and knobs ([`super::inserts`]).
+    Insert(super::inserts::InsertSlot, super::inserts::InsertMsg),
 }
 
 /// `Deck.trim`.
@@ -175,6 +177,8 @@ pub struct Renderer {
     aux: super::aux::AuxRender,
     /// The post chain on the master, before the master level; off by default (docs/POST.md).
     post: super::post_bus::PostRender,
+    /// The insert chains on the strips and the master ([`super::inserts`]).
+    inserts: super::inserts::InsertRender,
 }
 
 /// What each part of the mixer added to the master, block by block, after the master level:
@@ -303,6 +307,7 @@ impl Renderer {
             }
             Msg::Aux(m) => self.aux.apply(m, &mut self.strips),
             Msg::Post(p) => self.post.apply(p),
+            Msg::Insert(slot, m) => self.inserts.apply(slot, m),
             Msg::Audition(m) => {
                 if let Some(b) = self.audition.apply(m) {
                     if let Err(rtrb::PushError::Full(b)) = self.retire_buffers_tx.push(b) {
@@ -421,6 +426,14 @@ impl Renderer {
             // the strip's reverb: LOOP record has just heard the deck dry, the fader and the cue
             // send hear the room (Swift's source -> EQ -> reverb -> strip, with the tap on the EQ)
             s.reverb.process(&mut s.l[..n], &mut s.r[..n]);
+            // its insert chain, before the fader, the cue and the aux send
+            let bpm = s.core.mirror.tempo();
+            self.inserts.process(
+                super::inserts::InsertSlot::Deck(strip_k),
+                Some(if bpm > 0.0 { bpm } else { self.inserts.lead_bpm }),
+                &mut s.l[..n],
+                &mut s.r[..n],
+            );
             let peak = s.l[..n]
                 .iter()
                 .chain(&s.r[..n])
@@ -479,6 +492,17 @@ impl Renderer {
                 }
             }
         }
+        // the lead deck (playing, loudest through its fader) sets the inputs' and master's tempo
+        let mut lead = (0.0, 0.0);
+        for s in self.strips.iter() {
+            let bpm = s.core.mirror.tempo();
+            if s.core.mirror.is_playing() && bpm > 0.0 && s.last_gain > lead.0 {
+                lead = (s.last_gain, bpm);
+            }
+        }
+        if lead.1 > 0.0 {
+            self.inserts.lead_bpm = lead.1;
+        }
         let mut before = self
             .stems
             .as_ref()
@@ -519,6 +543,13 @@ impl Renderer {
             }
         }
         for (k, s) in self.inputs.iter_mut().enumerate() {
+            // its insert chain, before the fader and the cue
+            self.inserts.process(
+                super::inserts::InsertSlot::Input(k),
+                None,
+                &mut s.l[..n],
+                &mut s.r[..n],
+            );
             let ramp = self.aux.input_ramp(k);
             s.mix(
                 &mut out_l[..n],
@@ -572,6 +603,13 @@ impl Renderer {
         );
         // the post chain (off: nothing), before the master level so the fader still turns the
         // finished sound down
+        // the master's insert chain, before the post chain and the master level
+        self.inserts.process(
+            super::inserts::InsertSlot::Master,
+            None,
+            &mut out_l[..n],
+            &mut out_r[..n],
+        );
         self.post.process(&mut out_l[..n], &mut out_r[..n]);
         let m = self.master as f32;
         for i in 0..n {
@@ -1005,6 +1043,8 @@ pub struct Engine {
     pub aux: crate::fx::aux_bus::AuxSettings,
     /// What the render thread says about it.
     pub aux_mirror: Arc<super::aux::AuxMirror>,
+    /// The insert chains' settings (docs: [`super::inserts`]).
+    pub inserts: super::inserts::InsertState,
 }
 
 /// Build a mixer: the main-thread [`Engine`] and the render-thread [`Renderer`].
@@ -1185,6 +1225,7 @@ pub fn engine(config: EngineConfig) -> (Engine, Renderer) {
             aux_mirror.clone(),
         ),
         post: super::post_bus::PostRender::new(config.sample_rate, retire_post_tx, post_mirror.clone()),
+        inserts: super::inserts::InsertRender::new(config.decks.len(), config.inputs.len()),
     };
     let engine = Engine {
         sample_rate: config.sample_rate,
@@ -1246,6 +1287,7 @@ pub fn engine(config: EngineConfig) -> (Engine, Renderer) {
         copies: Vec::new(),
         aux: Default::default(),
         aux_mirror,
+        inserts: Default::default(),
     };
     (engine, renderer)
 }

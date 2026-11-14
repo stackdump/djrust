@@ -20,6 +20,8 @@
 //!   (`Audio/TimeStretch.swift`)
 //! - [`post`]: the post-processing ("master") chain for renders and the optional live output stage
 //!   (docs/POST.md)
+//! - [`insert`]: the insert chain on any strip or the master (filter, crush, tempo-synced
+//!   delay, reverb; each with its wet/dry, smoothed, real-time safe)
 //! - [`loop_fx`]: a loop clip's insert chain (drive, shaper, tone, auto-level) and the loop
 //!   channel's safety limiter (`Audio/LoopFx.swift`)
 
@@ -28,6 +30,7 @@ pub mod aux_bus;
 pub mod aux_macro;
 pub mod brake;
 pub mod catalogue;
+pub mod insert;
 pub mod limiter;
 pub mod loop_fx;
 pub mod loop_master;
@@ -49,6 +52,7 @@ pub mod vocoder;
 pub use automation::{FxAutomation, FxAutomationEvent};
 pub use aux_bus::{AuxBus, AuxFxKey, AuxSettings};
 pub use aux_macro::AuxMacro;
+pub use insert::{InsertChain, InsertKind, InsertParam, InsertSettings};
 pub use limiter::PeakLimiter;
 pub use loop_fx::{LoopFxLimiter, LoopFxParams, LoopFxVoice};
 pub use loop_master::{LoopMasterBus, LoopMasterCommand};
