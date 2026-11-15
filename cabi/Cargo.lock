@@ -54,17 +54,19 @@ dependencies = [
 
 [[package]]
 name = "djrust"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
+ "libc",
  "libm",
  "miniz_oxide",
  "once_cell",
+ "rtrb",
  "sha2",
 ]
 
 [[package]]
 name = "djwasm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "djrust",
 ]
@@ -105,6 +107,12 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "rtrb"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "342e1478a6e1c839e7405033eabfdc954d4d5dabd39f34e83420a43a95acfb04"
 
 [[package]]
 name = "sha2"

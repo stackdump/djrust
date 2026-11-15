@@ -11,6 +11,7 @@
 //! - [`macro_mirror`], [`marking_mirror`]: the seqlock-published records the audio thread
 //!   hands to the display (which macros hold which nets; every net's tokens and mutes)
 //! - [`part_levels`]: a part's level on its own synth voice, what a sampler is matched to
+//! - [`studio`]: `StudioShell`, the beats studio's live controls around one parity runner (djwasm)
 //!
 //! Parity is held by `tests/fixtures/js/wave.json` (written by beats' own JS).
 
@@ -28,6 +29,7 @@ pub mod net;
 pub mod part_levels;
 pub mod rests;
 pub mod runner;
+pub mod studio;
 pub mod synth;
 pub mod voice_tweak;
 
@@ -50,6 +52,7 @@ pub use runner::{
     audition, ChannelVoice, Lane, Master, PartLevelFn, RoleFilter, SampleKey, SamplerHost,
     SamplerSlots, StingerPolicy, VoiceShaping, WaveMod, WaveOptions, WaveProject, WaveRunner,
 };
+pub use studio::{CatalogId, StudioEvent, StudioShell};
 pub use synth::{
     biquad, build_table, drum_kind, drum_voice, is_drum_channel, noise_seed, pulse, tonal_voice,
     Pulse, VoiceSpec, PPQ, WAVE_TABLE_SIZE,

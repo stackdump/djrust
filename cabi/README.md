@@ -22,6 +22,14 @@ const url = 'https://cdn.jsdelivr.net/npm/djwasm@0.2.0/djwasm.wasm';
 const bytes = await (await fetch(url, { integrity: 'sha384-…' })).arrayBuffer();
 ```
 
+Since 0.3.0 the module adds exports for net macros, control-net macro dispatch, seek, groove, a
+frame clock and an event ring (`djw_features()` reports which; ABI_VERSION stays 1). `loader.js`
+and `worklet.js` feature-detect every 0.3+ export, so the same glue still drives a 0.2.0 module.
+The worklet's 0.3 messages (`fire-macro`, `panic`, `control-macros`, `seek`, `groove`, frame-
+stamped `at` / `q`) and its test hooks (`script`, `tap`, `tapHash`, `assertQuantum`) are documented
+in its header. With none of them used, 0.3.0 renders the 0.2.0 bytes
+(`cabi/tests/golden.rs` against `cabi/tests/fixtures/golden-0.2.0.json`).
+
 The version is djrust's: `djwasm@X` is djrust X. The same genre, seed and structure renders the
 same samples in every browser; a new engine version may change them, so pin it.
 

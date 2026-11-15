@@ -3,7 +3,7 @@
 # version follows djrust's (cabi/build.sh stamps the npm package from the root Cargo.toml).
 [package]
 name = "djwasm"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.82"
 license = "MIT"
@@ -17,6 +17,12 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 djrust = { path = "..", default-features = false }
+
+# Tests only: the host Engine (std) as a native differential oracle (tests/host_oracle.rs). The
+# cdylib the npm package ships is built without it (`cabi/build.sh`: no dev-dependencies, and
+# resolver 2 keeps dev features out of a non-test build).
+[dev-dependencies]
+djrust = { path = "..", features = ["host"] }
 
 [workspace]
 

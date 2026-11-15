@@ -3161,6 +3161,9 @@ pub struct WaveRunner {
     fx_start_bpm: f64,
     fx_target: f64,
     tempo_fx_mask: u32,
+    /// A tape-stop sweep sets whole bpm, clamped to 20..=300, as beats' page does
+    /// (`setTempoTransient`). Off = the sweep's exact curve (the DJ app's).
+    tempo_sweep_rounds: bool,
     macro_hold_ticks: i64,
     // Groove: notes held back by swing / humanize / the template, due at a sample time.
     groove_on: bool,
@@ -3299,6 +3302,7 @@ impl WaveRunner {
             fx_start_bpm: 120.0,
             fx_target: 120.0,
             tempo_fx_mask: 0,
+            tempo_sweep_rounds: false,
             macro_hold_ticks: 0,
             groove_on: opts_groove,
             held: Vec::with_capacity(GROOVE_CAPACITY),
@@ -3989,8 +3993,20 @@ impl WaveRunner {
                 1.0
             };
             let eased = 1.0 - (1.0 - t) * (1.0 - t);
-            self.set_tempo(self.fx_start_bpm + (self.fx_target - self.fx_start_bpm) * eased);
+            let bpm = self.fx_start_bpm + (self.fx_target - self.fx_start_bpm) * eased;
+            if self.tempo_sweep_rounds {
+                // Math.max(20, Math.min(300, Math.round(bpm)))
+                self.set_tempo(js_round(bpm).min(300.0).max(20.0));
+            } else {
+                self.set_tempo(bpm);
+            }
         }
+    }
+
+    /// Round a tape-stop sweep's tempo to whole bpm (clamped to 20..=300) the way beats' page
+    /// sends it (`effects.js` `setTempoTransient`). Off by default: the exact curve.
+    pub fn set_tempo_sweep_rounding(&mut self, on: bool) {
+        self.tempo_sweep_rounds = on;
     }
 
     /// beats `markMacroRunning` (macros/runtime.js): a macro of ANY kind is running for
