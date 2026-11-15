@@ -66,6 +66,12 @@ embedded, so an AudioWorklet or a CDN `<script type=module>` needs no second req
 import { Dj } from 'https://cdn.jsdelivr.net/npm/djrust@0.2.0/djrust.inline.js';
 ```
 
+**Browser, C ABI (`djwasm`).** `cabi/` is a second cdylib: the engine as a plain C-ABI module with
+a hand-written JS loader and AudioWorklet processor, for a scope with no `TextEncoder` and a site
+with no bundler. It is what beats.bitwrap.io loads. `cabi/build.sh` writes the `djwasm` npm package
+to `cabi/pkg` (versioned to djrust, with sha256 / SRI hashes in `hashes.json`); `cabi/publish.sh`
+publishes it and waits for jsDelivr to serve it. See `cabi/README.md`.
+
 To link the facade into your own wasm crate, depend on `djrust` with
 `default-features = false, features = ["wasm"]` and `pub use djrust::wasm::*;` from a `cdylib`.
 

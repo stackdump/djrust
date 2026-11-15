@@ -404,9 +404,24 @@ impl WaveGraph {
 
     // MARK: seeking
 
-    /// Rebuild the marking at `tick` by replaying from the start without sound (what the
-    /// sequencer worker's `fastForwardTo` does). Not for the audio thread: it is O(tick).
+    /// Rebuild the marking at `tick` as replaying from the start without sound does (what the
+    /// sequencer worker's `fastForwardTo` does): the graph ends exactly as
+    /// [`fast_forward_replay`](Self::fast_forward_replay) leaves it, marking, mutes, slots, the
+    /// tick and the last tick's events alike. Only the control nets are ticked `tick` times;
+    /// every other net steps alone and skips its whole cycles (`net.rs`, `fast_forward_jump`),
+    /// so the cost follows the control nets and the nets' cycle lengths, not `tick × nets`.
+    /// Falls back to the replay when an event buffer could have overflowed on some tick.
+    /// Allocates nothing.
     pub fn fast_forward(&mut self, target: i64) {
+        if target > 0 && self.fast_forward_jump(target) {
+            return;
+        }
+        self.fast_forward_replay(target);
+    }
+
+    /// The reference [`fast_forward`](Self::fast_forward): `reset`, then `advance` every net
+    /// `target` times (or up to a `stop-transport`). O(tick × nets).
+    pub fn fast_forward_replay(&mut self, target: i64) {
         self.reset();
         self.recording = false;
         let mut n = 0;

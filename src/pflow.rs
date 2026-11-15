@@ -171,6 +171,12 @@ pub struct ControlBinding {
     pub macro_name: Option<String>,
     pub macro_bars: Option<f64>,
     pub macro_params: Option<JsonValue>,
+    /// The legacy `macroId` of a `fire-macro` control (beats' `buildTransitionFireNet`, before
+    /// `macro` was the canonical field). Read only: never encoded (`to_json` writes `macro`
+    /// alone) and never transferred, so a document's canonical text and CID are the same with
+    /// or without it. The engine's control dispatch reads `macro`, then this, then `targetNet`.
+    #[cfg_attr(feature = "transfer", serde(skip))]
+    pub macro_id: Option<String>,
 }
 
 impl ControlBinding {
@@ -182,6 +188,7 @@ impl ControlBinding {
             macro_name: None,
             macro_bars: None,
             macro_params: None,
+            macro_id: None,
         }
     }
 }
@@ -452,10 +459,15 @@ impl NetBundle {
                             macro_name: None,
                             macro_bars: None,
                             macro_params: None,
+                            macro_id: None,
                         };
                         let m = get_string(co, "macro", "");
                         if !m.is_empty() {
                             cb.macro_name = Some(m);
+                        }
+                        let legacy = get_string(co, "macroId", "");
+                        if !legacy.is_empty() {
+                            cb.macro_id = Some(legacy);
                         }
                         let bars = get_float(co, "macroBars", 0.0);
                         if bars != 0.0 {
@@ -510,9 +522,14 @@ impl NetBundle {
                         macro_name: None,
                         macro_bars: None,
                         macro_params: None,
+                        macro_id: None,
                     };
                     if c.get("macro").is_some_and(JsonValue::is_truthy) {
                         cb.macro_name = Some(get_string(co, "macro", ""));
+                    }
+                    let legacy = get_string(co, "macroId", "");
+                    if !legacy.is_empty() {
+                        cb.macro_id = Some(legacy);
                     }
                     if c.get("macroBars").is_some_and(JsonValue::is_truthy) {
                         cb.macro_bars = Some(get_float(co, "macroBars", 0.0));
