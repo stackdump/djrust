@@ -69,18 +69,57 @@ pub enum LoopMasterCommand {
     FxUnit(FxUnitCommand),
 }
 
-const OP_CAPACITY: usize = 256;
-const EVENT_CAPACITY: usize = 512;
+pub(crate) const OP_CAPACITY: usize = 256;
+pub(crate) const EVENT_CAPACITY: usize = 512;
 
-/// This block's slider dispatches, in time order (`opIndex`...`opLive`).
-struct OpQueue {
-    n: usize,
-    index: [usize; OP_CAPACITY],
-    time: [f64; OP_CAPACITY],
-    key: [MasterFxKey; OP_CAPACITY],
-    value: [f64; OP_CAPACITY],
+/// This block's slider dispatches, in time order (`opIndex`...`opLive`). One definition, shared
+/// with the deck mixer (`host::deck::core`).
+pub(crate) struct OpQueue {
+    pub(crate) n: usize,
+    pub(crate) index: [usize; OP_CAPACITY],
+    pub(crate) time: [f64; OP_CAPACITY],
+    pub(crate) key: [MasterFxKey; OP_CAPACITY],
+    pub(crate) value: [f64; OP_CAPACITY],
     /// The op is the FX unit's (a ramp over the block), not a macro's slider.
-    live: [bool; OP_CAPACITY],
+    pub(crate) live: [bool; OP_CAPACITY],
+}
+
+impl OpQueue {
+    pub(crate) fn new() -> Box<OpQueue> {
+        Box::new(OpQueue {
+            n: 0,
+            index: [0; OP_CAPACITY],
+            time: [0.0; OP_CAPACITY],
+            key: [MasterFxKey::HpFreq; OP_CAPACITY],
+            value: [0.0; OP_CAPACITY],
+            live: [false; OP_CAPACITY],
+        })
+    }
+
+    /// A chain op for this block, `offset` seconds into it (`queue`); a full queue drops it.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn push(
+        &mut self,
+        frames: usize,
+        sample_rate: f64,
+        chain_t0: f64,
+        key: MasterFxKey,
+        value: f64,
+        offset: f64,
+        live: bool,
+    ) {
+        if self.n >= OP_CAPACITY {
+            return;
+        }
+        let offset = offset.max(0.0);
+        let i = self.n;
+        self.index[i] = frames.min(libm::ceil(offset * sample_rate).max(0.0) as usize);
+        self.time[i] = chain_t0 + offset;
+        self.key[i] = key;
+        self.value[i] = value;
+        self.live[i] = live;
+        self.n += 1;
+    }
 }
 
 /// A fire waiting for its frame.
@@ -153,14 +192,7 @@ impl LoopMasterBus {
             block_frames: 0,
             pending: [none; Self::PENDING_CAPACITY],
             pending_count: 0,
-            ops: Box::new(OpQueue {
-                n: 0,
-                index: [0; OP_CAPACITY],
-                time: [0.0; OP_CAPACITY],
-                key: [MasterFxKey::HpFreq; OP_CAPACITY],
-                value: [0.0; OP_CAPACITY],
-                live: [false; OP_CAPACITY],
-            }),
+            ops: OpQueue::new(),
             events: Vec::with_capacity(EVENT_CAPACITY),
             seen: 0,
             engaged: false,
@@ -298,7 +330,7 @@ impl LoopMasterBus {
             let ops = &mut self.ops;
             self.unit
                 .begin_block(n as i64, s, &self.fx, &mut |key, value| {
-                    push_op(ops, n, sr, t0, key, value, 0.0, true)
+                    ops.push(n, sr, t0, key, value, 0.0, true)
                 });
         }
         // the fires due in this block, in frame order; the source rendered up to each brake
@@ -447,8 +479,7 @@ impl LoopMasterBus {
             {
                 // the macro's slider, on the FX unit's setting (at neutral, the slider)
                 let v = self.unit.automated_at(key, value, animating);
-                push_op(
-                    &mut self.ops,
+                self.ops.push(
                     frames,
                     sr,
                     t0,
@@ -463,27 +494,3 @@ impl LoopMasterBus {
     }
 }
 
-/// A chain op for this block, `offset` seconds into it (`queue`).
-#[allow(clippy::too_many_arguments)]
-fn push_op(
-    ops: &mut OpQueue,
-    frames: usize,
-    sample_rate: f64,
-    chain_t0: f64,
-    key: MasterFxKey,
-    value: f64,
-    offset: f64,
-    live: bool,
-) {
-    if ops.n >= OP_CAPACITY {
-        return;
-    }
-    let offset = offset.max(0.0);
-    let i = ops.n;
-    ops.index[i] = frames.min(libm::ceil(offset * sample_rate).max(0.0) as usize);
-    ops.time[i] = chain_t0 + offset;
-    ops.key[i] = key;
-    ops.value[i] = value;
-    ops.live[i] = live;
-    ops.n += 1;
-}
