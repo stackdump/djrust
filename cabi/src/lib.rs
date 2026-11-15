@@ -28,7 +28,8 @@
 //!   additive, so the ABI stays 1: a loader feature-detects them (or reads [`djw_features`]).
 //! - Every new message export (`djw_fire_macro` … `djw_set_groove`, `djw_events`) allocates
 //!   nothing, as [`djw_process`] does not (`tests/alloc.rs` counts); [`djw_init`],
-//!   [`djw_init_with`] and [`djw_load`] are the calls that allocate.
+//!   [`djw_init_with`] and [`djw_load`] are the calls that allocate, and so does
+//!   [`djw_set_instrument`] (the live instrument change rebuilds a net's lanes, as a load does).
 //!
 //! The generator half ([`djw_compose`]) returns beats' project document byte for byte
 //! (`JSON.stringify(projectToJSON(compose(genre, params)))`), its model CID and canonical size.
@@ -588,8 +589,9 @@ pub extern "C" fn djw_muted() -> i32 {
 // 0.2.0 sound, which is what an instance plays until one of them is called.
 
 /// What this build runs, one bit per studio feature (djrust `wave::studio::feature`): SEEK 1,
-/// NET_MACROS 2, CONTROL_MACROS 4, GROOVE 8, FRAME_CLOCK 16, EVENTS 32 in 0.3.0; FX 64,
-/// MASTER_MACROS 128, AUX_MACROS 256, VOICE 512, STRIKE 1024, INSTRUMENT 2048, TRANSPOSE 4096,
+/// NET_MACROS 2, CONTROL_MACROS 4, GROOVE 8, FRAME_CLOCK 16, EVENTS 32 in 0.3.0; INSTRUMENT 2048
+/// ([`djw_set_instrument`]) after it; FX 64, MASTER_MACROS 128, AUX_MACROS 256, VOICE 512,
+/// STRIKE 1024, TRANSPOSE 4096,
 /// LOOP 8192, STINGER_VOICES 16384, ROUTES 32768 later. A loader that finds no `djw_features`
 /// export is talking to 0.2.0: every bit 0. (A wasm `i64`: JS receives a BigInt.)
 #[no_mangle]
@@ -854,6 +856,41 @@ pub extern "C" fn djw_set_groove(swing: f64, humanize: f64) -> i32 {
     };
     match e.shell.set_groove(swing, humanize) {
         ERR_ARG => fail(ERR_ARG, "swing and humanize must be finite"),
+        ERR_NOT_READY => fail(ERR_NOT_READY, "no project loaded"),
+        r => r,
+    }
+}
+
+/// Play net `id` on instrument `name` from the next block on, without moving the song
+/// (feature INSTRUMENT, 2048): the net's lanes are rebuilt as a [`djw_load`] of the project with
+/// `track.instrument` set to `name` would build them, and swapped in; the tick, the marking and
+/// every other net play on. It applies to the project playing and to one queued for the next
+/// bar. 0; [`ERR_NOT_READY`] with no project; [`ERR_ARG`] when either text is not UTF-8, the
+/// name is empty, or `id` is not a net with lanes (a control net, an unknown id). Allocates, as
+/// [`djw_load`] does (it frees the lanes it replaced in the same call).
+///
+/// # Safety
+/// `id_ptr .. id_ptr + id_len` and `name_ptr .. name_ptr + name_len` must be readable.
+#[no_mangle]
+pub unsafe extern "C" fn djw_set_instrument(
+    id_ptr: *const u8,
+    id_len: usize,
+    name_ptr: *const u8,
+    name_len: usize,
+) -> i32 {
+    let Some(e) = engine() else {
+        return fail(ERR_NOT_READY, "djw_init has not been called");
+    };
+    let (Some(id), Some(name)) = (text(id_ptr, id_len), text(name_ptr, name_len)) else {
+        return fail(ERR_ARG, "id and name must be UTF-8");
+    };
+    let r = e.shell.set_instrument(id, name);
+    free_retired(e);
+    match r {
+        ERR_ARG => fail(
+            ERR_ARG,
+            "no net with lanes of that id, or an empty instrument name",
+        ),
         ERR_NOT_READY => fail(ERR_NOT_READY, "no project loaded"),
         r => r,
     }

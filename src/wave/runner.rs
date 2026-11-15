@@ -1706,6 +1706,103 @@ impl WaveProject {
 /// `buildLanes(graph, sr, opts)`: one lane per (music net, drum kind) for drum channels,
 /// one pooled tonal lane per other music net. Writes the lane index of every MIDI-bound
 /// transition into `net.lane`.
+/// [`WaveRunner::set_instrument`] on one project: rebuild it with `net_id` on `instrument` and
+/// move that net's lanes (and what is derived from the lanes as a whole: the held sampler
+/// slots, the slot masks and gains, the sampled-part tables) into `proj`. Returns the rebuilt
+/// project, now holding `proj`'s old lanes and slot references, for the retire list
+/// (`Some(None)`: the net already plays `instrument`, nothing was rebuilt); None (and `proj`
+/// untouched) when `net_id` has no lanes in `proj`.
+fn graft_instrument(
+    proj: &mut WaveProject,
+    net_id: &str,
+    instrument: &str,
+    sr: f64,
+    runner_opts: &WaveOptions,
+    frame: i64,
+    lane_ends: &mut Vec<LaneEnd>,
+) -> Option<Option<WaveProject>> {
+    let ni = *proj.graph.by_id.get(net_id)?;
+    let lanes_of = proj.by_net.get(net_id)?.clone();
+    if lanes_of.is_empty() {
+        return None;
+    }
+    if proj.graph.nets[ni].bundle.track.instrument == instrument {
+        // already playing it: nothing to rebuild, so nothing it holds is cut
+        return Some(None);
+    }
+    // the copy the lanes are built from: the running graph (its marking and the lane index of
+    // every binding come out the same), with the instrument changed
+    let mut g = proj.graph.clone();
+    g.nets[ni].bundle.track.instrument = String::from(instrument);
+    if let Some(nb) = g.project.nets.get_mut(net_id) {
+        nb.track.instrument = String::from(instrument);
+    }
+    let geometry = g.project.clone();
+    // what `prepare` measured for this project, so the rebuilt lanes carry it as the first
+    // build's did (and `rests` already holds `extra_rest`)
+    let mut opts = runner_opts.clone();
+    if proj.balance.is_some() {
+        opts.track_balance = proj.balance.clone();
+    }
+    opts.rests = Some(proj.song_rests.clone());
+    opts.extra_rest = None;
+    opts.tail = proj.tail.clone();
+    let mut fresh = build_lanes(
+        g,
+        sr,
+        &opts,
+        proj.start_tick,
+        Some(proj.track_serial),
+        proj.harmony.clone(),
+        Some(&geometry),
+    );
+    // the instrument decides each lane's voice, never which lanes a net has (that is its
+    // channel and its notes): the indices line up. Refuse rather than graft if they ever don't.
+    if fresh.by_net.get(net_id) != Some(&lanes_of) || fresh.lanes.len() != proj.lanes.len() {
+        return None;
+    }
+    let melody = proj.graph.nets[ni].bundle.riff_group == "melody" || net_id == "melody";
+    let first_melody = proj
+        .graph
+        .nets
+        .iter()
+        .position(|n| n.bundle.riff_group == "melody" || n.id == "melody");
+    let mut swap: Vec<usize> = lanes_of;
+    // the live keys play the first melody net's instrument
+    if melody && first_melody == Some(ni) {
+        swap.push(proj.live_lane);
+    }
+    for &li in &swap {
+        let old = &proj.lanes[li];
+        if old.sample_slot >= 0 && lane_ends.len() < lane_ends.capacity() {
+            lane_ends.push(LaneEnd {
+                lane: old.uid,
+                frame,
+            });
+        }
+        core::mem::swap(&mut proj.lanes[li], &mut fresh.lanes[li]);
+    }
+    // the sources of am / fm read `PREV` off the lane at that index: still the same indices
+    core::mem::swap(&mut proj.held, &mut fresh.held);
+    proj.duck_slots = fresh.duck_slots;
+    proj.send_slots = fresh.send_slots;
+    proj.echo_slots = fresh.echo_slots;
+    proj.slot_echo = fresh.slot_echo;
+    proj.slot_gain = fresh.slot_gain;
+    proj.gain_slots = fresh.gain_slots;
+    proj.slot_width = fresh.slot_width;
+    proj.width_slots = fresh.width_slots;
+    proj.side_slots = fresh.side_slots;
+    core::mem::swap(&mut proj.sampled_groups, &mut fresh.sampled_groups);
+    core::mem::swap(&mut proj.probe_levels, &mut fresh.probe_levels);
+    core::mem::swap(&mut proj.sampled_part_db, &mut fresh.sampled_part_db);
+    proj.graph.nets[ni].bundle.track.instrument = String::from(instrument);
+    if let Some(nb) = proj.graph.project.nets.get_mut(net_id) {
+        nb.track.instrument = String::from(instrument);
+    }
+    Some(Some(fresh))
+}
+
 fn build_lanes(
     mut g: WaveGraph,
     sr: f64,
@@ -3431,6 +3528,58 @@ impl WaveRunner {
                 }
             }
         }
+    }
+
+    /// Play `net_id` on `instrument` from the next sample on, in place. Unlike a load, the
+    /// song keeps its position: the marking, the tick, the other nets' lanes and the notes
+    /// they hold are not touched. It applies to the project playing and to the one queued for
+    /// the next bar, so the swap at the bar does not undo it. Returns how many projects took
+    /// it: 0 when there is no project, or `net_id` is not a net with lanes there (a control
+    /// net, a net with no MIDI bindings, an unknown id).
+    ///
+    /// The net's lanes become exactly the lanes a fresh load of the project with that
+    /// instrument would build ([`build_lanes`] on a copy of the running graph, with this
+    /// runner's options and the per-project measurements the project was prepared with: its
+    /// `.balance` trims, rests, tail and section harmony), grafted into the running project at
+    /// the same indices. That is the whole contract `tests/instrument.rs` holds it to: after
+    /// the change, the project renders bit for bit what the project with the instrument set
+    /// in its document renders. Not carried over: the notes the net's old lanes were sounding
+    /// (they stop; a sampled lane's are ended through [`lane_ends`](Self::lane_ends)), and a
+    /// [`set_voice`](Self::set_voice) tweak or a pan / decay macro move on its channel (send
+    /// them again after the change).
+    ///
+    /// Allocates (it builds lanes, as [`prepare`](Self::prepare) does): call it between
+    /// blocks, like a load, not inside a render. The rebuilt project the lanes came from waits
+    /// in the retire list with the old lanes, for the host to free ([`pop_retired`]).
+    ///
+    /// [`pop_retired`]: Self::pop_retired
+    pub fn set_instrument(&mut self, net_id: &str, instrument: &str) -> usize {
+        let frame = self.block_start + self.block_offset;
+        let mut took = 0;
+        for which in 0..2 {
+            let proj = if which == 0 {
+                self.current.as_mut()
+            } else {
+                self.pending.as_mut()
+            };
+            let Some(proj) = proj else { continue };
+            let Some(spent) = graft_instrument(
+                proj,
+                net_id,
+                instrument,
+                self.sample_rate,
+                &self.opts,
+                frame,
+                &mut self.lane_ends,
+            ) else {
+                continue;
+            };
+            took += 1;
+            if let Some(spent) = spent {
+                self.retire(spent);
+            }
+        }
+        took
     }
 
     /// `WaveProject.generation` of the project the clock is running (0: none).

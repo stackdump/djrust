@@ -160,5 +160,6 @@ fn init_flags_are_checked() {
     assert_eq!(djw_init_with(48000.0, DJW_GROOVE), 4096);
     assert_eq!(djw_set_groove(f64::NAN, 0.0), ERR_ARG);
     assert_eq!(djw_set_groove(0.0, 0.0), ERR_NOT_READY);
-    assert_eq!(djw_features(), 0x3f);
+    // 0.3.0's six, plus INSTRUMENT (2048)
+    assert_eq!(djw_features(), 0x3f | 0x800);
 }
