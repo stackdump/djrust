@@ -98,7 +98,8 @@ pub struct Output {
 }
 
 impl Output {
-    /// The default output device, or the first whose name contains `name` (case-insensitive).
+    /// The default output device, or the one named `name` (case-insensitive): the exact name first,
+    /// else the first whose name contains it, so a name that is a prefix of another's is not shadowed.
     /// `sample_rate`: ask for this rate when the device supports it, else its default.
     pub fn open(name: Option<&str>, sample_rate: Option<u32>) -> Result<Output, HostError> {
         let host = cpal::default_host();
@@ -108,10 +109,13 @@ impl Output {
                 .ok_or_else(|| be("no default output device"))?,
             Some(want) => {
                 let want = want.to_lowercase();
-                host.output_devices()
-                    .map_err(be)?
-                    .find(|d| name_of(d).to_lowercase().contains(&want))
-                    .ok_or_else(|| be(format!("no output device named like {want:?}")))?
+                let all: Vec<cpal::Device> = host.output_devices().map_err(be)?.collect();
+                let pos = all
+                    .iter()
+                    .position(|d| name_of(d).to_lowercase() == want)
+                    .or_else(|| all.iter().position(|d| name_of(d).to_lowercase().contains(&want)))
+                    .ok_or_else(|| be(format!("no output device named like {want:?}")))?;
+                all.into_iter().nth(pos).expect("position is in range")
             }
         };
         let mut supported = device.default_output_config().map_err(be)?;
