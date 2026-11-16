@@ -245,7 +245,7 @@ dependencies = [
 
 [[package]]
 name = "djrust"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "cpal",
  "jni-sys 0.3.1",

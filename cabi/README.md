@@ -30,7 +30,7 @@ stamped `at` / `q`) and its test hooks (`script`, `tap`, `tapHash`, `assertQuant
 in its header. With none of them used, 0.3.0 renders the 0.2.0 bytes
 (`cabi/tests/golden.rs` against `cabi/tests/fixtures/golden-0.2.0.json`).
 
-After 0.3.0: a live instrument change, `djw_set_instrument(net, name)` (feature `INSTRUMENT`,
+Since 0.3.2: a live instrument change, `djw_set_instrument(net, name)` (feature `INSTRUMENT`,
 2048; `dj.setInstrument(netId, name)`; the worklet's `{type:'instrument', netId, instrument}`). The
 net's lanes are rebuilt as a load of the project with that instrument would build them and
 swapped in while the song plays on (the tick, the marking and every other net untouched); the
