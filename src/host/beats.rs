@@ -620,8 +620,8 @@ mod tests {
         }
         let got = cid::hex(&cid::sha256(&bytes));
         let want = match env!("CARGO_PKG_VERSION") {
-            // 0.2.0 adds controls (perform, fire_macro, engage, set_voice); 0.3.0 adds wave::studio (djwasm); the render is unchanged
-            "0.1.0" | "0.2.0" | "0.3.0" => "ca88a195487d8406c42226bc27786ea971e7e1698dc25de016a305f4a4817c21",
+            // 0.2.0 adds controls (perform, fire_macro, engage, set_voice); 0.3.0 adds wave::studio (djwasm); the render is unchanged; 0.3.1 is a re-release of 0.3.0 (npm)
+            "0.1.0" | "0.2.0" | "0.3.0" | "0.3.1" => "ca88a195487d8406c42226bc27786ea971e7e1698dc25de016a305f4a4817c21",
             v => panic!("no golden render for djrust {v}: add it (render_offline techno:42, 10 s, 48 kHz)"),
         };
         assert_eq!(got, want, "techno:42 renders differently: a new engine version must bump the crate version");
