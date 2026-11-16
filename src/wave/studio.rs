@@ -82,8 +82,10 @@ pub mod feature {
         ("ROUTES", ROUTES),
     ];
 
-    /// djwasm 0.3.0.
-    pub const THIS_BUILD: u64 = SEEK | NET_MACROS | CONTROL_MACROS | GROOVE | FRAME_CLOCK | EVENTS;
+    /// djwasm 0.3.0, plus the live instrument change ([`INSTRUMENT`]:
+    /// `StudioShell::set_instrument`, `djw_set_instrument`).
+    pub const THIS_BUILD: u64 =
+        SEEK | NET_MACROS | CONTROL_MACROS | GROOVE | FRAME_CLOCK | EVENTS | INSTRUMENT;
 }
 
 /// The bit a macro id takes in the disabled mask (and, for net macros, `djw_macro_mask`):
@@ -747,6 +749,26 @@ impl StudioShell {
     /// The swing and humanize every later load takes (None: each project its own).
     pub fn groove(&self) -> Option<(f64, f64)> {
         self.groove
+    }
+
+    /// Play net `net_id` on `instrument` from the next sample on, without moving the song
+    /// ([`feature::INSTRUMENT`]): the net's lanes are rebuilt as a load of the project with
+    /// that instrument would build them and swapped in, on the project playing and on the one
+    /// queued for the next bar ([`WaveRunner::set_instrument`] has the contract). [`OK`];
+    /// [`ERR_NOT_READY`] with no project; [`ERR_ARG`] for an empty name, or an id that is not
+    /// a net with lanes (a control net, a net with no MIDI bindings, an unknown id). Allocates:
+    /// a message call, like a load. The old lanes wait in the runner's retire list.
+    pub fn set_instrument(&mut self, net_id: &str, instrument: &str) -> i32 {
+        if self.runner.project().is_none() {
+            return ERR_NOT_READY;
+        }
+        if instrument.is_empty() {
+            return ERR_ARG;
+        }
+        if self.runner.set_instrument(net_id, instrument) == 0 {
+            return ERR_ARG;
+        }
+        OK
     }
 }
 
