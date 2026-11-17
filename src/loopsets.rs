@@ -8,11 +8,16 @@
 //! its two riffs with every part playing:
 //!
 //! - **A**: each part's A riff (its fullest instance) with the parts that have one riff only;
-//! - **B**: each part's B riff, the answer to A (a part with no B keeps its A).
+//! - **B**: each part's B riff (a part with no B keeps its A), then paired with A: the voices
+//!   answer in A's gaps or an octave away, and never start a note against one of A's.
 //!
 //! Load a group's A on one deck and its B on the other and the crossfader swaps the answer in, as
-//! with the Acid Bass bank. Without drums both play the tonal parts alone. Drum rings are a bar
-//! (or half of one), the tonal ones 4 bars (blues: 12).
+//! with the Acid Bass bank, or play both at once: the two are **paired** ([`crate::looppair`]).
+//! They share the key, the tempo and the length; the groove (kick, snare, bass, harmony) is the
+//! same notes in both, so layered it stacks in unison; the voices (the melody, the arp) are
+//! made to answer, B's notes falling in the gaps of A's, or an octave from them
+//! ([`crate::looppair::complement`]). Without drums both play the tonal parts alone. Drum rings
+//! are a bar (or half of one), the tonal ones 4 bars (blues: 12).
 //!
 //! Two kinds of set, one code path:
 //!
@@ -35,6 +40,7 @@ use alloc::vec::Vec;
 use crate::gen::structure::is_stinger_id;
 use crate::gen::tables::BeatsTables;
 use crate::json::{JsonObject, JsonValue};
+use crate::looppair;
 use crate::musicality::note_log::capture_all;
 use crate::musicality::report::MusicalityReport;
 use crate::musicality::track_variety::transpose_track;
@@ -148,9 +154,9 @@ pub fn key_label(root: i64, scale: &str) -> String {
 /// A or B of a group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
-    /// Groove: the drums and the bass.
+    /// The call: every part's first riff.
     A,
-    /// Full: everything.
+    /// The answer: every part's second riff, paired with A ([`crate::looppair`]).
     B,
 }
 
@@ -394,6 +400,8 @@ impl LoopSet {
         }
         o.set("bpm", JsonValue::Number(self.bpm));
         o.set("transpose", JsonValue::int(self.transpose));
+        // the rule that pairs B with A is part of what makes the loops
+        o.set("pairing", JsonValue::int(looppair::VERSION as i64));
         o.set(
             "tracks",
             JsonValue::Array(
@@ -424,8 +432,10 @@ impl LoopSet {
                     side,
                     name: g.name.clone(),
                     description: match side {
-                        Side::A => "every part's first riff".into(),
-                        Side::B => "the answer, every part's second riff".into(),
+                        Side::A => "the call: every part's first riff".into(),
+                        Side::B => {
+                            "the answer: the same groove, the lead answering in A's gaps".into()
+                        }
                     },
                     bpm: self.bpm,
                     key: key.clone(),
@@ -448,11 +458,30 @@ impl LoopSet {
         Some((self.groups.iter().find(|g| g.number == n)?, side))
     }
 
+    /// Group `group`'s two loops, A then B, as they load on the decks: the pair
+    /// ([`crate::looppair`]).
+    pub fn pair(&self, group: u32, drums: bool) -> Option<(Project, Project)> {
+        Some((
+            self.project(&format!("{group}A"), drums)?,
+            self.project(&format!("{group}B"), drums)?,
+        ))
+    }
+
+    /// How group `group`'s B stands to its A ([`looppair::report`]).
+    pub fn pair_report(&self, group: u32, drums: bool) -> Option<looppair::PairReport> {
+        let (a, b) = self.pair(group, drums)?;
+        Some(looppair::report(&a, &b))
+    }
+
     /// Loop `id` as a project to load on a deck (djrust `Engine::load`, which prepares a
     /// hand-built project without a second musicality pass), with or without its drums.
     pub fn project(&self, id: &str, drums: bool) -> Option<Project> {
         let (g, side) = self.parse_id(id)?;
-        let mut p = cut(&played(&self.genre, g.seed), side, drums);
+        let track = played(&self.genre, g.seed);
+        let mut p = cut(&track, side, drums);
+        if side == Side::B {
+            p = looppair::complement(&cut(&track, Side::A, drums), p);
+        }
         if p.nets.is_empty() {
             return None;
         }
