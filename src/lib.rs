@@ -53,6 +53,7 @@ pub mod journal;
 pub mod json;
 pub mod layers;
 pub mod looplib;
+pub mod looppair;
 pub mod loopsets;
 pub mod loudness;
 pub mod mixer;
