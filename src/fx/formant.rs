@@ -36,15 +36,19 @@ use core::f64::consts::PI;
 pub const N_FORMANTS: usize = 5;
 /// The most unison copies (choir singers) a voice runs.
 pub const MAX_UNISON: usize = 8;
+/// A diphthong's second vowel starts this long after the note, ms, and takes this time constant.
+const GLIDE_AT_MS: f64 = 110.0;
+const GLIDE_MS: f64 = 75.0;
 /// Samples between coefficient updates (the formant glide, vibrato depth ramp).
 pub const CONTROL_PERIOD: u32 = 32;
 
 // MARK: vowels
 
 /// The vowels in knob order: a position `v` in 0..=6 names one, fractions morph between
-/// neighbours. `ah` (as in "but") and `oo` (as in "book") are the choir's open "aah" and
+/// neighbours. Three more (`ae` as in "cat", `ih` as in "bit", `er` as in "bird") sit at 7..=9:
+/// the lyrics' vowels (docs/VOICE.md). They are not on the live knob ([`VOWEL_MAX`]). `ah` (as in "but") and `oo` (as in "book") are the choir's open "aah" and
 /// rounded "ooh".
-pub const VOWEL_NAMES: [&str; 7] = ["a", "e", "i", "o", "u", "ah", "oo"];
+pub const VOWEL_NAMES: [&str; 10] = ["a", "e", "i", "o", "u", "ah", "oo", "ae", "ih", "er"];
 
 /// One vowel: five formant frequencies (Hz), bandwidths (Hz) and parallel-branch levels
 /// (linear, the cascade ignores them).
@@ -64,7 +68,7 @@ const fn shape(f: [f64; 3], f4: f64, amp: [f64; 3]) -> VowelShape {
 }
 
 /// The table (adult male; F1-F3 Peterson & Barney 1952, F4/F5 and bandwidths Klatt 1980).
-pub const VOWELS: [VowelShape; 7] = [
+pub const VOWELS: [VowelShape; 10] = [
     shape([730.0, 1090.0, 2440.0], 3300.0, [1.0, 0.50, 0.25]), // a  (father)
     shape([530.0, 1840.0, 2480.0], 3300.0, [1.0, 0.40, 0.25]), // e  (bed)
     shape([270.0, 2290.0, 3010.0], 3400.0, [1.0, 0.25, 0.20]), // i  (beet)
@@ -72,16 +76,21 @@ pub const VOWELS: [VowelShape; 7] = [
     shape([300.0, 870.0, 2240.0], 3300.0, [1.0, 0.30, 0.10]),  // u  (boot)
     shape([640.0, 1190.0, 2390.0], 3300.0, [1.0, 0.55, 0.25]), // ah (but)
     shape([440.0, 1020.0, 2240.0], 3300.0, [1.0, 0.35, 0.12]), // oo (book)
+    shape([660.0, 1720.0, 2410.0], 3300.0, [1.0, 0.40, 0.25]), // ae (cat)
+    shape([390.0, 1990.0, 2550.0], 3300.0, [1.0, 0.35, 0.20]), // ih (bit)
+    shape([490.0, 1350.0, 1690.0], 3300.0, [1.0, 0.45, 0.30]), // er (bird)
 ];
 
-/// The highest vowel position.
-pub const VOWEL_MAX: f64 = (VOWELS.len() - 1) as f64;
+/// The highest vowel position on the live knob (`a` .. `oo`); the lyrics' vowels lie beyond it.
+pub const VOWEL_MAX: f64 = 6.0;
+/// The highest position in [`VOWELS`].
+const TABLE_MAX: f64 = (VOWELS.len() - 1) as f64;
 
 /// Vowel position `v` (0 a .. 6 oo), morphed between neighbours: frequencies in log,
 /// bandwidths and levels linearly.
 pub fn vowel_at(v: f64) -> VowelShape {
     let v = if v.is_finite() {
-        v.clamp(0.0, VOWEL_MAX)
+        v.clamp(0.0, TABLE_MAX)
     } else {
         0.0
     };
@@ -109,6 +118,9 @@ pub fn parse_vowel(s: &str) -> Option<f64> {
         "u" | "uu" => 4.0,
         "ah" | "aa" | "aah" | "uh" => 5.0,
         "oo" | "ooh" => 6.0,
+        "ae" => 7.0,
+        "ih" => 8.0,
+        "er" => 9.0,
         _ => {
             let x: f64 = s.parse().ok()?;
             return (x.is_finite() && (0.0..=VOWEL_MAX).contains(&x)).then_some(x);
@@ -120,7 +132,7 @@ pub fn parse_vowel(s: &str) -> Option<f64> {
 /// The nearest vowel's name.
 pub fn vowel_name(v: f64) -> &'static str {
     let v = if v.is_finite() { v } else { 0.0 };
-    VOWEL_NAMES[(libm::round(v.clamp(0.0, VOWEL_MAX)) as usize).min(VOWEL_NAMES.len() - 1)]
+    VOWEL_NAMES[(libm::round(v.clamp(0.0, TABLE_MAX)) as usize).min(VOWEL_NAMES.len() - 1)]
 }
 
 // MARK: syllables
@@ -146,10 +158,21 @@ pub enum Onset {
     Y,
     S,
     H,
+    // the lyrics' consonants (docs/VOICE.md): appended, so every packed code keeps its meaning
+    F,
+    V,
+    Z,
+    Sh,
+    Zh,
+    Ch,
+    Jh,
+    Th,
+    Dh,
+    Ng,
 }
 
 impl Onset {
-    pub const ALL: [Onset; 15] = [
+    pub const ALL: [Onset; 25] = [
         Onset::None,
         Onset::B,
         Onset::D,
@@ -165,6 +188,16 @@ impl Onset {
         Onset::Y,
         Onset::S,
         Onset::H,
+        Onset::F,
+        Onset::V,
+        Onset::Z,
+        Onset::Sh,
+        Onset::Zh,
+        Onset::Ch,
+        Onset::Jh,
+        Onset::Th,
+        Onset::Dh,
+        Onset::Ng,
     ];
 
     pub fn letter(self) -> &'static str {
@@ -184,14 +217,68 @@ impl Onset {
             Onset::Y => "y",
             Onset::S => "s",
             Onset::H => "h",
+            Onset::F => "f",
+            Onset::V => "v",
+            Onset::Z => "z",
+            Onset::Sh => "sh",
+            Onset::Zh => "zh",
+            Onset::Ch => "ch",
+            Onset::Jh => "j",
+            Onset::Th => "th",
+            Onset::Dh => "dh",
+            Onset::Ng => "ng",
         }
     }
 
-    fn from_letter(c: char) -> Option<Onset> {
+    /// The onset spelled `s` exactly (`d`, `sh`, `j`), or None.
+    pub fn from_text(s: &str) -> Option<Onset> {
         Onset::ALL
             .iter()
             .copied()
-            .find(|o| *o != Onset::None && o.letter().starts_with(c))
+            .find(|o| *o != Onset::None && o.letter() == s)
+    }
+
+    /// Whether the consonant is voiced (the vocal cords buzz through it).
+    pub fn voiced(self) -> bool {
+        matches!(
+            self,
+            Onset::B
+                | Onset::D
+                | Onset::G
+                | Onset::M
+                | Onset::N
+                | Onset::L
+                | Onset::R
+                | Onset::W
+                | Onset::Y
+                | Onset::V
+                | Onset::Z
+                | Onset::Zh
+                | Onset::Jh
+                | Onset::Dh
+                | Onset::Ng
+        )
+    }
+
+    /// Whether it is a sonorant (a nasal, liquid or glide): it keeps the voice going.
+    pub fn sonorant(self) -> bool {
+        matches!(
+            self,
+            Onset::M | Onset::N | Onset::L | Onset::R | Onset::W | Onset::Y | Onset::Ng
+        )
+    }
+
+    /// How long a consonant on its own lasts (as a cluster member or a coda), ms.
+    pub fn duration_ms(self) -> f64 {
+        match self {
+            Onset::None => 0.0,
+            Onset::B | Onset::D | Onset::G | Onset::P | Onset::T | Onset::K => 55.0,
+            Onset::M | Onset::N | Onset::Ng => 70.0,
+            Onset::L | Onset::R | Onset::W | Onset::Y => 60.0,
+            Onset::H => 50.0,
+            Onset::Ch | Onset::Jh => 95.0,
+            _ => 85.0,
+        }
     }
 
     /// How the onset sounds (see [`OnsetShape`]).
@@ -300,6 +387,88 @@ impl Onset {
                 aspirate: 0.7,
                 ..o
             },
+            // fricatives: f and th are weak and broad, s and sh strong; the voiced ones buzz
+            // quietly under the noise
+            Onset::F => OnsetShape {
+                gap_ms: 70.0,
+                fricative: 0.30,
+                fric_hz: 6500.0,
+                ..o
+            },
+            Onset::V => OnsetShape {
+                gap_ms: 60.0,
+                fricative: 0.16,
+                fric_hz: 5500.0,
+                voice_bar: 0.55,
+                murmur_ms: 60.0,
+                ..o
+            },
+            Onset::Z => OnsetShape {
+                gap_ms: 70.0,
+                fricative: 0.32,
+                fric_hz: 5200.0,
+                voice_bar: 0.55,
+                murmur_ms: 70.0,
+                ..o
+            },
+            Onset::Sh => OnsetShape {
+                gap_ms: 100.0,
+                fricative: 0.55,
+                fric_hz: 2600.0,
+                ..o
+            },
+            Onset::Zh => OnsetShape {
+                gap_ms: 75.0,
+                fricative: 0.32,
+                fric_hz: 2400.0,
+                voice_bar: 0.55,
+                murmur_ms: 75.0,
+                ..o
+            },
+            Onset::Th => OnsetShape {
+                gap_ms: 80.0,
+                fricative: 0.16,
+                fric_hz: 7000.0,
+                ..o
+            },
+            Onset::Dh => OnsetShape {
+                gap_ms: 35.0,
+                fricative: 0.10,
+                fric_hz: 6000.0,
+                voice_bar: 0.6,
+                murmur_ms: 35.0,
+                glide_ms: 30.0,
+                locus: locus(300.0, 1500.0, 2600.0),
+                ..o
+            },
+            // affricates: the burst first, then the noise
+            Onset::Ch => OnsetShape {
+                gap_ms: 100.0,
+                burst: 0.45,
+                burst_hz: 3200.0,
+                burst_first: true,
+                fricative: 0.5,
+                fric_hz: 2800.0,
+                ..o
+            },
+            Onset::Jh => OnsetShape {
+                gap_ms: 85.0,
+                burst: 0.30,
+                burst_hz: 3000.0,
+                burst_first: true,
+                fricative: 0.30,
+                fric_hz: 2600.0,
+                voice_bar: 0.5,
+                murmur_ms: 85.0,
+                ..o
+            },
+            // "ng": a nasal at the soft palate
+            Onset::Ng => OnsetShape {
+                locus: locus(250.0, 2000.0, 2300.0),
+                glide_ms: 45.0,
+                murmur_ms: 70.0,
+                ..o
+            },
         }
     }
 }
@@ -323,6 +492,10 @@ pub struct OnsetShape {
     /// A sibilant: high-passed noise until voicing.
     pub fricative: f64,
     pub fric_hz: f64,
+    /// The level of the voice's buzz before voicing proper (voiced fricatives and affricates).
+    pub voice_bar: f64,
+    /// The burst comes at the start, not at the release (an affricate: burst, then noise).
+    pub burst_first: bool,
 }
 
 impl Default for OnsetShape {
@@ -337,18 +510,32 @@ impl Default for OnsetShape {
             murmur_ms: 0.0,
             fricative: 0.0,
             fric_hz: 5000.0,
+            voice_bar: 0.0,
+            burst_first: false,
         }
     }
 }
 
-/// A syllable: an optional consonant onset into a vowel. Packed into a `u16` on a MIDI binding
-/// ([`code`](Self::code); 0 = none), written as text in a document (`"vowel": "da"`).
+/// The vowel of a consonant on its own (a cluster member): no nucleus, noise only.
+pub const NO_VOWEL: u8 = u8::MAX;
+
+/// A syllable: an optional consonant onset into a vowel, which may glide to a second vowel (a
+/// diphthong) and end in a consonant (the coda). Packed into a `u16` on a MIDI binding
+/// ([`code`](Self::code), which carries the onset and the vowel only; 0 = none), written as text
+/// in a document (`"vowel": "da"`).
+///
+/// The text is `[onset]vowel[+glide][.coda]`: `da`, `sha`, `ah+ih` (the "i" of "ride"),
+/// `ra+ih.t` ("right"); a consonant alone is `.t` ([`Syllable::consonant`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "transfer", derive(serde::Serialize, serde::Deserialize))]
 pub struct Syllable {
     pub onset: Onset,
-    /// Index into [`VOWELS`].
+    /// Index into [`VOWELS`] ([`NO_VOWEL`]: a consonant on its own).
     pub vowel: u8,
+    /// The vowel the first glides to, after the note has settled (`ay`, `ow`, `oy`).
+    pub glide: Option<u8>,
+    /// A consonant the note ends on, when it is let go.
+    pub coda: Onset,
 }
 
 impl Syllable {
@@ -356,12 +543,33 @@ impl Syllable {
         Syllable {
             onset: Onset::None,
             vowel: v.min(VOWELS.len() as u8 - 1),
+            glide: None,
+            coda: Onset::None,
         }
     }
 
-    /// The packed form: `onset << 8 | (vowel + 1)`, never 0.
+    /// `onset` + `vowel`, nothing else.
+    pub fn new(onset: Onset, vowel: u8) -> Syllable {
+        Syllable {
+            onset,
+            ..Syllable::vowel(vowel)
+        }
+    }
+
+    /// A consonant on its own: noise, a burst, a hum, no vowel (the `str` of "street").
+    pub fn consonant(o: Onset) -> Syllable {
+        Syllable {
+            onset: o,
+            vowel: NO_VOWEL,
+            glide: None,
+            coda: Onset::None,
+        }
+    }
+
+    /// The packed form: `onset << 8 | (vowel + 1)`, never 0. The glide and the coda are not in
+    /// it.
     pub fn code(self) -> u16 {
-        ((self.onset as u16) << 8) | (self.vowel as u16 + 1)
+        ((self.onset as u16) << 8) | (self.vowel as u16 + 1).min(0xff)
     }
 
     /// The packed form back (0, or a code out of range: None).
@@ -371,36 +579,82 @@ impl Syllable {
         if v == 0 || v > VOWELS.len() || o >= Onset::ALL.len() {
             return None;
         }
-        Some(Syllable {
-            onset: Onset::ALL[o],
-            vowel: (v - 1) as u8,
-        })
+        Some(Syllable::new(Onset::ALL[o], (v - 1) as u8))
     }
 
-    /// `a`, `oo`, `da`, `roo`, `kah` (one consonant at most, then a vowel name; case and
-    /// surrounding space ignored). The vowel spellings are [`parse_vowel`]'s, whole numbers only.
+    /// `a`, `oo`, `da`, `roo`, `kah`, `sha`, `ah+ih.t` (case and surrounding space ignored).
+    /// The vowel spellings are [`parse_vowel`]'s, whole numbers only.
     pub fn parse(s: &str) -> Option<Syllable> {
         let s = s.trim().to_ascii_lowercase();
-        if let Some(v) = parse_vowel(&s).filter(|v| libm::fmod(*v, 1.0) == 0.0) {
-            return Some(Syllable::vowel(v as u8));
+        let (body, coda) = match s.split_once('.') {
+            Some((b, c)) => (b, Some(c)),
+            None => (s.as_str(), None),
+        };
+        let coda = match coda {
+            None => Onset::None,
+            Some(c) => Onset::from_text(c).filter(|_| !c.is_empty())?,
+        };
+        if body.is_empty() {
+            // `.t`: a consonant alone
+            return (coda != Onset::None).then(|| Syllable::consonant(coda));
         }
-        let mut chars = s.chars();
-        let onset = Onset::from_letter(chars.next()?)?;
-        let rest = chars.as_str();
-        let v = parse_vowel(rest).filter(|v| libm::fmod(*v, 1.0) == 0.0 && !rest.is_empty())?;
-        if rest.chars().any(|c| c.is_ascii_digit()) {
-            return None;
-        }
-        Some(Syllable {
-            onset,
-            vowel: v as u8,
-        })
+        let (head, glide) = match body.split_once('+') {
+            Some((h, g)) => (h, Some(g)),
+            None => (body, None),
+        };
+        let glide = match glide {
+            None => None,
+            Some(g) => Some(Self::whole_vowel(g)?),
+        };
+        let mut syl = if let Some(v) = Self::whole_vowel(head) {
+            Syllable::vowel(v)
+        } else {
+            // the longest onset that leaves a vowel
+            let mut found = None;
+            for n in (1..=2.min(head.len() - 1)).rev() {
+                if !head.is_char_boundary(n) {
+                    continue;
+                }
+                let (o, rest) = head.split_at(n);
+                if let (Some(o), Some(v)) = (Onset::from_text(o), Self::whole_vowel(rest)) {
+                    found = Some(Syllable::new(o, v));
+                    break;
+                }
+            }
+            found?
+        };
+        syl.glide = glide;
+        syl.coda = coda;
+        Some(syl)
     }
 
-    /// The canonical text: the onset's letter, then the vowel's name.
+    fn whole_vowel(s: &str) -> Option<u8> {
+        if s.is_empty() || s.chars().any(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        parse_vowel(s)
+            .filter(|v| libm::fmod(*v, 1.0) == 0.0)
+            .map(|v| v as u8)
+    }
+
+    /// The canonical text: the onset's letter, then the vowel's name, then `+glide` and
+    /// `.coda` when it has them.
     pub fn text(self) -> String {
+        if self.vowel == NO_VOWEL {
+            return alloc::format!(".{}", self.onset.letter());
+        }
         let mut s = String::from(self.onset.letter());
-        s.push_str(VOWEL_NAMES[self.vowel as usize]);
+        if self.vowel != NO_VOWEL {
+            s.push_str(VOWEL_NAMES[self.vowel as usize]);
+        }
+        if let Some(g) = self.glide {
+            s.push('+');
+            s.push_str(VOWEL_NAMES[g as usize]);
+        }
+        if self.coda != Onset::None {
+            s.push('.');
+            s.push_str(self.coda.letter());
+        }
         s
     }
 }
@@ -903,6 +1157,13 @@ pub struct FormantVoice {
     vowel: f64,
     banks: [[Resonator; N_FORMANTS]; 2],
     onset: Onset,
+    /// The consonant the note ends on, and the samples since it began (None: not yet).
+    coda: Onset,
+    coda_t: Option<u32>,
+    /// A second vowel the note glides to once it has settled.
+    glide_to: Option<f64>,
+    /// False for a consonant on its own: noise and a hum, no voiced vowel.
+    nucleus: bool,
     burst: NoiseFilter,
     fric: NoiseFilter,
     voicing: f64,
@@ -932,6 +1193,10 @@ impl FormantVoice {
             vowel: 0.0,
             banks: [[Resonator::default(); N_FORMANTS]; 2],
             onset: Onset::None,
+            coda: Onset::None,
+            coda_t: None,
+            glide_to: None,
+            nucleus: true,
             burst: NoiseFilter::default(),
             fric: NoiseFilter::default(),
             voicing: 1.0,
@@ -988,11 +1253,15 @@ impl FormantVoice {
         self.t = 0;
         self.ctl = 0;
         let v = match syllable {
-            Some(s) => s.vowel as f64,
-            None => vowel.unwrap_or(p.vowel),
+            Some(s) if s.vowel != NO_VOWEL => s.vowel as f64,
+            _ => vowel.unwrap_or(p.vowel),
         };
         self.set_target(p, v);
         self.onset = syllable.map_or(Onset::None, |s| s.onset);
+        self.nucleus = syllable.is_none_or(|s| s.vowel != NO_VOWEL);
+        self.coda = syllable.map_or(Onset::None, |s| s.coda);
+        self.coda_t = None;
+        self.glide_to = syllable.and_then(|s| s.glide).map(|g| g as f64);
         let os = self.onset.shape();
         let glide_ms = if self.onset != Onset::None && os.glide_ms > 0.0 {
             os.glide_ms
@@ -1065,6 +1334,14 @@ impl FormantVoice {
         let ms = 1000.0 / sr;
         let t_ms = self.t as f64 * ms;
         if self.ctl == 0 {
+            // a diphthong: once the note has settled, head for its second vowel
+            if let Some(g) = self.glide_to {
+                if t_ms >= GLIDE_AT_MS && self.coda_t.is_none() {
+                    self.glide_to = None;
+                    self.set_target(p, g);
+                    self.glide_k = glide_coef(GLIDE_MS, sr);
+                }
+            }
             // control rate: glide the formants, wander the copies
             let k = self.glide_k;
             let mut moving = false;
@@ -1096,12 +1373,14 @@ impl FormantVoice {
         // the onset: voicing, murmur, noise
         let os = self.onset.shape();
         let ramp = 5.0;
-        self.voicing = if t_ms < os.gap_ms {
-            0.0
+        self.voicing = if !self.nucleus {
+            os.voice_bar
+        } else if t_ms < os.gap_ms {
+            os.voice_bar
         } else {
-            ((t_ms - os.gap_ms) / ramp).min(1.0)
+            os.voice_bar.max(((t_ms - os.gap_ms) / ramp).min(1.0))
         };
-        let murmur = if os.murmur_ms > 0.0 && t_ms < os.murmur_ms + 20.0 {
+        let mut murmur = if os.murmur_ms > 0.0 && t_ms < os.murmur_ms + 20.0 {
             (1.0 - ((t_ms - os.murmur_ms) / 20.0).clamp(0.0, 1.0)).clamp(0.0, 1.0)
         } else {
             0.0
@@ -1109,6 +1388,33 @@ impl FormantVoice {
         let mut aspiration = p.breath * 0.15;
         if os.aspirate > 0.0 && t_ms < os.gap_ms + ramp {
             aspiration += os.aspirate * (1.0 - self.voicing);
+        }
+        // the coda: the voice closes on its last consonant
+        let cs = self.coda.shape();
+        let mut c_ms = -1.0;
+        if let Some(ct) = self.coda_t {
+            c_ms = ct as f64 * ms;
+            let hold = if self.coda.sonorant() {
+                1.0
+            } else if self.coda.voiced() {
+                0.45
+            } else {
+                0.0
+            };
+            let f = (c_ms / 15.0).min(1.0);
+            self.voicing *= 1.0 + (hold - 1.0) * f;
+            let dark = if matches!(self.coda, Onset::M | Onset::N | Onset::Ng) {
+                (c_ms / 20.0).min(1.0)
+            } else if self.coda.voiced() && !self.coda.sonorant() {
+                (c_ms / 20.0).min(1.0) * 0.6
+            } else {
+                0.0
+            };
+            murmur = murmur.max(dark);
+            // a voiceless stop's aspiration after its burst
+            if cs.aspirate > 0.0 && c_ms > cs.gap_ms * 0.7 && c_ms < cs.gap_ms * 0.7 + 35.0 {
+                aspiration += cs.aspirate * 0.6 * (1.0 - (c_ms - cs.gap_ms * 0.7) / 35.0);
+            }
         }
 
         // the source: the copies, detuned, each with its vibrato and drift
@@ -1179,7 +1485,7 @@ impl FormantVoice {
         }
         // the burst and the sibilant, outside the tract
         if os.burst > 0.0 {
-            let at = if self.onset.shape().aspirate > 0.0 {
+            let at = if os.aspirate > 0.0 || os.burst_first {
                 0.0
             } else {
                 os.gap_ms
@@ -1193,8 +1499,51 @@ impl FormantVoice {
             let e = (t_ms / 10.0).min(1.0) * (1.0 - ((t_ms - os.gap_ms) / 15.0).clamp(0.0, 1.0));
             y += self.fric.tick(noise) * os.fricative * e;
         }
+        // the coda's noise: a stop's burst after its closure, a fricative's hiss
+        if c_ms >= 0.0 {
+            let release = if cs.aspirate > 0.0 { cs.gap_ms * 0.7 } else { 25.0 };
+            if cs.burst > 0.0 {
+                let at = if cs.burst_first { 0.0 } else { release };
+                if c_ms >= at && c_ms < at + 12.0 {
+                    y += self.burst.tick(noise) * cs.burst * (1.0 - (c_ms - at) / 12.0);
+                }
+            }
+            if cs.fricative > 0.0 {
+                let e = ((c_ms - 8.0) / 12.0).clamp(0.0, 1.0)
+                    * (1.0 - ((c_ms - self.coda.duration_ms() + 20.0) / 20.0).clamp(0.0, 1.0));
+                y += self.fric.tick(noise) * cs.fricative * e;
+            }
+        }
         self.t = self.t.saturating_add(1);
+        if self.coda_t.is_some() {
+            self.coda_t = self.coda_t.map(|c| c.saturating_add(1));
+        }
         y * p.level
+    }
+
+    /// The note is being let go: close on its coda, if it has one. Returns how long the
+    /// consonant takes, ms (0: no coda, release at once).
+    pub fn begin_coda(&mut self, p: &VoiceParams, sr: f64) -> f64 {
+        if self.coda == Onset::None || self.coda_t.is_some() || !self.sounding {
+            return 0.0;
+        }
+        let cs = self.coda.shape();
+        let shift = cents(p.formant_shift * 100.0);
+        self.coda_t = Some(0);
+        self.glide_to = None;
+        if let Some(l) = cs.locus {
+            for k in 0..3 {
+                self.tgt[k] = libm::log2(l[k] * shift);
+            }
+            self.glide_k = glide_coef(cs.glide_ms.max(25.0), sr);
+        }
+        if cs.burst > 0.0 {
+            self.burst.set(false, cs.burst_hz * shift, 1.2, sr);
+        }
+        if cs.fricative > 0.0 {
+            self.fric.set(true, cs.fric_hz, 0.7, sr);
+        }
+        self.coda.duration_ms()
     }
 }
 
@@ -1233,6 +1582,8 @@ pub struct FormantSynth {
     voices: [FormantVoice; SYNTH_VOICES],
     notes: [Option<u8>; SYNTH_VOICES],
     held: [bool; SYNTH_VOICES],
+    /// Samples a note keeps its gate open for its coda, after its note off.
+    coda_left: [u32; SYNTH_VOICES],
     gate: [f64; SYNTH_VOICES],
     /// The vowel position notes sing (a live knob; a note's syllable wins at its start).
     vowel: f64,
@@ -1251,6 +1602,7 @@ impl FormantSynth {
             }),
             notes: [None; SYNTH_VOICES],
             held: [false; SYNTH_VOICES],
+            coda_left: [0; SYNTH_VOICES],
             gate: [0.0; SYNTH_VOICES],
             vowel: params.vowel,
             attack_step: 0.0,
@@ -1323,20 +1675,29 @@ impl FormantSynth {
         }
         self.notes[k] = Some(note);
         self.held[k] = true;
+        self.coda_left[k] = 0;
         let p = self.params;
         self.voices[k].start_at(&p, hz, syllable, Some(self.vowel), self.sr);
     }
 
+    /// Let `note` go. A note with a coda stays open for the consonant, then releases.
     pub fn note_off(&mut self, note: u8) {
+        let p = self.params;
         for k in 0..SYNTH_VOICES {
-            if self.notes[k] == Some(note) {
-                self.held[k] = false;
+            if self.notes[k] == Some(note) && self.held[k] && self.coda_left[k] == 0 {
+                let ms = self.voices[k].begin_coda(&p, self.sr);
+                if ms > 0.0 {
+                    self.coda_left[k] = (ms * 0.001 * self.sr) as u32 + 1;
+                } else {
+                    self.held[k] = false;
+                }
             }
         }
     }
 
     pub fn all_off(&mut self) {
         self.held = [false; SYNTH_VOICES];
+        self.coda_left = [0; SYNTH_VOICES];
     }
 
     /// The notes sounding (held or releasing).
@@ -1353,6 +1714,12 @@ impl FormantSynth {
                 continue;
             }
             for o in out.iter_mut() {
+                if self.coda_left[k] > 0 {
+                    self.coda_left[k] -= 1;
+                    if self.coda_left[k] == 0 {
+                        self.held[k] = false;
+                    }
+                }
                 let target = if self.held[k] { 1.0 } else { 0.0 };
                 let g = &mut self.gate[k];
                 if *g < target {
@@ -1624,5 +1991,175 @@ mod tests {
         out.fill(0.0);
         s.render(&mut out);
         assert_eq!(s.sounding(), 0);
+    }
+
+    // MARK: the lyrics' consonants, codas and diphthongs
+
+    /// The share of `x`'s Goertzel energy above 3 kHz (a spectral tilt, 0..1).
+    fn brightness(x: &[f32]) -> f64 {
+        let (mut lo, mut hi) = (1e-12, 1e-12);
+        for k in 1..60 {
+            let f = 100.0 * k as f64 * 1.12;
+            if f > 20_000.0 {
+                break;
+            }
+            let e = tone(x, f);
+            if f < 3000.0 {
+                lo += e * e;
+            } else {
+                hi += e * e;
+            }
+        }
+        hi / (lo + hi)
+    }
+
+    #[test]
+    fn extended_syllables_round_trip_as_text() {
+        for s in [
+            "fa", "va", "za", "sha", "zha", "cha", "ja", "tha", "dha", "nga", "ah+ih", "ra+ih.t",
+            "sha+oo.ng", "ka.z", ".s", ".t", "ae", "ih.n", "er.d", "ma.m",
+        ] {
+            let syl = Syllable::parse(s).unwrap_or_else(|| panic!("{s}"));
+            assert_eq!(syl.text(), s, "{s}");
+        }
+        let r = Syllable::parse("ra+ih.t").unwrap();
+        assert_eq!((r.onset, r.vowel, r.glide, r.coda), (Onset::R, 0, Some(8), Onset::T));
+        // a plain code carries the onset and the vowel only
+        assert_eq!(Syllable::from_code(r.code()), Some(Syllable::new(Onset::R, 0)));
+        assert_eq!(Syllable::parse("sha.").map(|_| ()), None);
+        assert_eq!(Syllable::parse("sh"), None);
+        assert!(Syllable::consonant(Onset::T).text() == ".t");
+        // every old code means what it did
+        assert_eq!(Syllable::new(Onset::H, 6).code(), (14 << 8) | 7);
+    }
+
+    #[test]
+    fn fricatives_differ_by_where_their_noise_sits() {
+        let p = preset("robot").unwrap().params;
+        let n = 4800;
+        let bright = |o: Onset| brightness(&render(&p, 110.0, Some(Syllable::consonant(o)), n));
+        let (s, sh, f, th) = (bright(Onset::S), bright(Onset::Sh), bright(Onset::F), bright(Onset::Th));
+        assert!(s > 0.5 && sh > 0.2, "s {s} sh {sh}");
+        assert!(s > sh, "s is brighter than sh: {s} {sh}");
+        // f and th are weak
+        let level = |o: Onset| {
+            let x = render(&p, 110.0, Some(Syllable::consonant(o)), n);
+            x.iter().map(|v| (*v as f64).powi(2)).sum::<f64>()
+        };
+        assert!(level(Onset::S) > level(Onset::F), "s louder than f");
+        assert!(level(Onset::Sh) > level(Onset::Th));
+        assert!(f.is_finite() && th.is_finite());
+    }
+
+    #[test]
+    fn voiced_fricatives_buzz_and_voiceless_ones_do_not() {
+        let p = preset("robot").unwrap().params;
+        let n = 3600;
+        let low = |o: Onset| {
+            let x = render(&p, 110.0, Some(Syllable::consonant(o)), n);
+            (1..8).map(|h| tone(&x, 110.0 * h as f64).powi(2)).sum::<f64>()
+        };
+        assert!(low(Onset::Z) > 5.0 * low(Onset::S), "z buzzes: {} {}", low(Onset::Z), low(Onset::S));
+        assert!(low(Onset::V) > 5.0 * low(Onset::F));
+        assert!(low(Onset::Zh) > 5.0 * low(Onset::Sh));
+    }
+
+    #[test]
+    fn an_affricate_bursts_first_then_hisses() {
+        let p = preset("robot").unwrap().params;
+        let x = render(&p, 110.0, Some(Syllable::consonant(Onset::Ch)), 6000);
+        let early = x[..480].iter().map(|v| v.abs()).fold(0f32, f32::max);
+        let mid = x[1200..2400].iter().map(|v| v.abs()).fold(0f32, f32::max);
+        assert!(early > 0.05 && mid > 0.02, "{early} {mid}");
+    }
+
+    #[test]
+    fn a_coda_closes_the_note() {
+        let p = preset("robot").unwrap().params;
+        let sr = SR;
+        let run = |coda: Onset| {
+            let mut s = FormantSynth::new(sr, p);
+            s.set_gate_times(5.0, 20.0);
+            let mut syl = Syllable::new(Onset::D, 0);
+            syl.coda = coda;
+            s.note_on_syllable(57, Some(syl));
+            let mut out = vec![0f32; 14_400];
+            s.render(&mut out);
+            s.note_off(57);
+            let mut tail = vec![0f32; 9600];
+            s.render(&mut tail);
+            (out, tail, s.sounding())
+        };
+        let (_, plain_tail, _) = run(Onset::None);
+        let (_, t_tail, _) = run(Onset::T);
+        let (_, s_tail, _) = run(Onset::S);
+        let (_, n_tail, _) = run(Onset::N);
+        // without a coda the note dies within ~20 ms; with one it keeps sounding for the consonant
+        let e = |x: &[f32]| x.iter().map(|v| (*v as f64).powi(2)).sum::<f64>();
+        let (plain, t, sx, nn) = (e(&plain_tail[1500..]), e(&t_tail[1000..]), e(&s_tail[1000..]), e(&n_tail[1000..]));
+        assert!(plain < 1e-6, "plain note is silent after its release: {plain}");
+        assert!(t > 1e-4 && sx > 1e-4 && nn > 1e-4, "{t} {sx} {nn}");
+        // the s coda is a hiss: bright; the n coda a hum: dark
+        assert!(brightness(&s_tail[500..4000]) > 3.0 * brightness(&n_tail[500..4000]));
+        // and every coda ends by itself
+        let mut s = FormantSynth::new(SR, p);
+        s.set_gate_times(5.0, 20.0);
+        let mut syl = Syllable::new(Onset::B, 1);
+        syl.coda = Onset::Ng;
+        s.note_on_syllable(60, Some(syl));
+        let mut out = vec![0f32; 4800];
+        s.render(&mut out);
+        s.note_off(60);
+        s.note_off(60); // twice is the same
+        for _ in 0..20 {
+            s.render(&mut out);
+        }
+        assert_eq!(s.sounding(), 0);
+    }
+
+    #[test]
+    fn a_diphthong_glides_to_its_second_vowel() {
+        let p = preset("choir-aah").unwrap().params;
+        let mut v = FormantVoice::new(5);
+        let mut syl = Syllable::new(Onset::None, 0); // a
+        syl.glide = Some(8); // ih
+        v.start(&p, 110.0, Some(syl), SR);
+        for _ in 0..(SR * 0.02) as usize {
+            v.sample(&p, 1.0, SR);
+        }
+        let early = v.formants();
+        for _ in 0..(SR * 0.6) as usize {
+            v.sample(&p, 1.0, SR);
+        }
+        let late = v.formants();
+        // a (730/1090) toward ih (390/1990)
+        assert!(early[0] > 650.0 && early[1] < 1300.0, "{early:?}");
+        assert!((late[0] - 390.0).abs() < 60.0 && (late[1] - 1990.0).abs() < 200.0, "{late:?}");
+    }
+
+    #[test]
+    fn every_onset_and_coda_is_bounded_and_deterministic() {
+        let p = preset("robot-choir").unwrap().params;
+        for o in Onset::ALL {
+            for vowel in [0u8, 4, 9] {
+                let mut syl = Syllable::new(o, vowel);
+                syl.coda = o;
+                let mut s = FormantSynth::new(SR, p);
+                s.set_gate_times(5.0, 30.0);
+                s.note_on_syllable(52, Some(syl));
+                let mut a = vec![0f32; 9600];
+                s.render(&mut a);
+                s.note_off(52);
+                let mut b = vec![0f32; 9600];
+                s.render(&mut b);
+                assert!(a.iter().chain(b.iter()).all(|x| x.is_finite() && x.abs() < 4.0), "{o:?}");
+                let mut s2 = FormantSynth::new(SR, p);
+                s2.set_gate_times(5.0, 30.0);
+                s2.note_on_syllable(52, Some(syl));
+                let mut a2 = vec![0f32; 9600];
+                s2.render(&mut a2);
+                assert_eq!(a, a2, "{o:?}");
+            }
+        }
     }
 }
