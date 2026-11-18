@@ -322,6 +322,101 @@ fn a_loop_saved_at_another_rate_loads_at_this_one_keeping_its_beats() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// What the headline loops did: made at 44.1 kHz, but cut to its beats' length counted in
+/// 48 kHz frames, so the file is 44.1/48 of what its tempo says. The tempo and beats are
+/// trusted: the audio is fitted to them, and the loop plays at the tempo it names.
+#[test]
+fn a_loop_whose_audio_is_short_for_its_tempo_is_fitted_not_retimed() {
+    let dir = temp_dir("fit");
+    let lib = CaptureLibrary::new(&dir);
+    // 8 beats at 124 BPM is 3.871 s: 170 710 frames at 44.1 kHz. The file has 0.91875 of that.
+    let want = (8.0f64 * 60.0 / 124.0 * 44_100.0).round() as usize;
+    let n = (want as f64 * 44_100.0 / 48_000.0) as usize;
+    let x: Vec<f32> = (0..n).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
+    let meta = LoopMeta {
+        id: "cafe01".into(),
+        title: "LLM: I P O".into(),
+        bpm: 124.0,
+        beats: 8,
+        sample_rate: 44_100.0,
+        // the metadata's frames count was the tool's idea, not the file's
+        frames: want,
+        channels: 1,
+        source: "vox".into(),
+        kind: "input".into(),
+        created: 1,
+        row: false,
+        from: String::new(),
+    };
+    lib.save(&meta, &x, None).unwrap();
+
+    let saved = lib.load("cafe01", 48_000.0).unwrap();
+    assert_eq!(saved.buffer.length(), (8.0f64 * 60.0 / 124.0 * 48_000.0).round() as usize);
+    assert_eq!(saved.fitted.map(|f| f.0), Some((n as f64 * 48_000.0 / 44_100.0).round() as usize));
+    // the audio keeps its speed: the first samples are the file's, at the new rate
+    let r = &saved.buffer.left;
+    assert!(r.len() > 1000 && (r[480] - x[441]).abs() < 0.01, "{} {}", r[480], x[441]);
+    // and the silence is at the end
+    assert!(r[r.len() - 100..].iter().all(|v| *v == 0.0));
+
+    // the engine reads the tempo the loop names
+    let mut g = Rig::new(124.0);
+    g.e.set_loop_library(Some(CaptureLibrary::new(&dir)));
+    assert!(g.e.library_load("cafe01"));
+    let c = g.e.clip("cafe01").unwrap();
+    assert_eq!(c.beats, 8);
+    assert!((c.bpm - 124.0).abs() < 0.01, "bpm {}", c.bpm);
+
+    // a loop already on its grid is not touched, and neither is one that is a different length
+    // altogether (half as long: its tempo is read from its length, as before)
+    let mut ok = x.clone();
+    ok.resize(want, 0.0);
+    let meta2 = LoopMeta { id: "cafe02".into(), ..meta.clone() };
+    lib.save(&meta2, &ok, None).unwrap();
+    assert!(lib.load("cafe02", 44_100.0).unwrap().fitted.is_none());
+    let half: Vec<f32> = ok[..want / 2].to_vec();
+    let meta3 = LoopMeta { id: "cafe03".into(), ..meta.clone() };
+    lib.save(&meta3, &half, None).unwrap();
+    let h = lib.load("cafe03", 44_100.0).unwrap();
+    assert!(h.fitted.is_none() && h.buffer.length() == want / 2);
+    // too long is trimmed
+    let mut long = ok.clone();
+    long.extend(std::iter::repeat(0.25).take(want / 20));
+    lib.save(&LoopMeta { id: "cafe04".into(), ..meta.clone() }, &long, None).unwrap();
+    assert_eq!(lib.load("cafe04", 44_100.0).unwrap().buffer.length(), want);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A WAV from another tool is imported at the rate its header says, with the tempo and beats
+/// the caller gives: stereo or mono, 16-bit or float.
+#[test]
+fn an_imported_wav_keeps_its_own_rate_and_is_trusted_on_tempo_and_beats() {
+    let dir = temp_dir("import");
+    let lib = CaptureLibrary::new(&dir);
+    let want = (4.0f64 * 60.0 / 130.0 * 44_100.0).round() as usize;
+    let l: Vec<f32> = (0..want).map(|i| (i as f32 * 0.03).sin() * 0.4).collect();
+    let r: Vec<f32> = l.iter().map(|v| -v).collect();
+    let bytes = wav_encode(44_100, &l, Some(&r));
+    let m = lib.import_wav(&bytes, "bounce", 130.0, 4, "bounce").unwrap();
+    assert_eq!((m.sample_rate, m.beats, m.channels, m.frames), (44_100.0, 4, 2, want));
+    assert!(m.id.len() == 64);
+    // beats 0 reads the length from the audio
+    let m2 = lib.import_wav(&wav_encode(44_100, &l[..want / 2], None), "half", 130.0, 0, "x").unwrap();
+    assert_eq!(m2.beats, 2);
+    assert!(lib.import_wav(b"nope", "x", 130.0, 4, "x").is_err());
+    assert!(lib.import_wav(&bytes, "x", 0.0, 4, "x").is_err());
+    // it lists, and loads at the engine's rate with the tempo it was given
+    assert_eq!(lib.list().len(), 2);
+    let s = lib.load(&m.id, 48_000.0).unwrap();
+    assert_eq!(s.buffer.length(), (4.0f64 * 60.0 / 130.0 * 48_000.0).round() as usize);
+    assert!(s.buffer.right.is_some() && s.fitted.is_none());
+    let mut g = Rig::new(130.0);
+    g.e.set_loop_library(Some(CaptureLibrary::new(&dir)));
+    assert!(g.e.library_load(&m.id));
+    assert!((g.e.clip(&m.id).unwrap().bpm - 130.0).abs() < 0.01);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_damaged_library_entry_is_skipped_not_fatal() {
     let dir = temp_dir("bad");

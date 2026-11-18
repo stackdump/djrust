@@ -28,6 +28,35 @@ pub struct CaptureLibrary {
 pub struct SavedLoop {
     pub meta: LoopMeta,
     pub buffer: SampleBuffer,
+    /// The audio was not `beats` long at `bpm` and was padded or trimmed to be (see
+    /// [`fit_to_grid`]): the file's frames before, and after.
+    pub fitted: Option<(usize, usize)>,
+}
+
+/// How far a loop's length may stray from its beats at its tempo before it is fitted: a fifth of
+/// a percent (the resampler's rounding is one sample).
+const GRID_TOLERANCE: f64 = 0.002;
+/// Past this the audio is not "that loop, a little short or long": it is something else, and its
+/// tempo is read from its length as before.
+const GRID_LIMIT: f64 = 0.25;
+
+/// Make `x` (at `sample_rate`) exactly `beats` beats long at `bpm`: pad it with silence or trim
+/// the tail. A loop that carries a tempo and a length in beats names its own grid, and the audio
+/// that disagrees by a little (a tail cut by a tool working at another rate, a render that ran
+/// short) is wrong, not the grid. Returns whether it changed; a loop already on its grid (within
+/// [`GRID_TOLERANCE`]), one with no tempo or beats, or one off by more than [`GRID_LIMIT`] is
+/// left alone.
+pub fn fit_to_grid(x: &mut Vec<f32>, sample_rate: f64, bpm: f64, beats: i64) -> bool {
+    if !(bpm > 0.0) || beats <= 0 || x.is_empty() {
+        return false;
+    }
+    let want = (beats as f64 * 60.0 / bpm * sample_rate).round() as usize;
+    let off = (x.len() as f64 - want as f64).abs() / want.max(1) as f64;
+    if off <= GRID_TOLERANCE || off > GRID_LIMIT {
+        return false;
+    }
+    x.resize(want, 0.0);
+    true
 }
 
 impl CaptureLibrary {
@@ -89,8 +118,11 @@ impl CaptureLibrary {
         read_json(&self.json_path(id)).and_then(|j| LoopMeta::from_json(&j))
     }
 
-    /// Read one loop, resampled to `sample_rate` if it was saved at another (its beats and tempo
-    /// are kept: only the rate changes).
+    /// Read one loop at `sample_rate`. The WAV's own header says what rate it is (the metadata's
+    /// `sampleRate` is only a hint): it is resampled from that. Its tempo and beats are kept
+    /// (they are what the loop is), and audio that is a little too short or long for them is
+    /// padded or trimmed to fit ([`fit_to_grid`]), so a loop made by another tool at another
+    /// rate plays at the tempo it says.
     pub fn load(&self, id: &str, sample_rate: f64) -> Option<SavedLoop> {
         let mut meta = self.meta(id)?;
         let wav = wav_decode(&std::fs::read(self.wav_path(id)).ok()?)?;
@@ -102,17 +134,63 @@ impl CaptureLibrary {
                 crate::host::decode::resample(&x, rate, sample_rate)
             }
         };
-        let left = conv(wav.left);
-        let right = wav.right.map(conv);
+        let mut left = conv(wav.left);
+        let mut right = wav.right.map(conv);
         if left.is_empty() {
             return None;
+        }
+        let before = left.len();
+        let fitted = fit_to_grid(&mut left, sample_rate, meta.bpm, meta.beats);
+        if fitted {
+            if let Some(r) = right.as_mut() {
+                r.resize(left.len(), 0.0);
+            }
         }
         meta.frames = left.len();
         meta.sample_rate = sample_rate;
         Some(SavedLoop {
             meta,
+            fitted: fitted.then_some((before, left.len())),
             buffer: SampleBuffer::new(left, right, sample_rate),
         })
+    }
+
+    /// Add a WAV the app did not record (a render, a bounce, a loop from another tool) as a loop
+    /// of `beats` beats at `bpm`. Its rate is the file's own header's, stored in the metadata, so
+    /// it is read at that rate whatever the engine runs at; `bpm` and `beats` are trusted (the
+    /// audio is fitted to them on load, [`fit_to_grid`]). `beats` 0 reads it from the audio's
+    /// length and `bpm`. The id is a hash of the file.
+    pub fn import_wav(&self, bytes: &[u8], title: &str, bpm: f64, beats: i64, source: &str) -> Result<LoopMeta, String> {
+        let wav = wav_decode(bytes).ok_or("not a WAV I can read (PCM 16/24 or float 32, mono or stereo)")?;
+        if !(bpm > 0.0) {
+            return Err("a tempo (bpm) is needed".into());
+        }
+        let rate = wav.sample_rate as f64;
+        let secs = wav.left.len() as f64 / rate;
+        let beats = if beats > 0 { beats } else { (secs * bpm / 60.0).round() as i64 };
+        if beats <= 0 {
+            return Err("the audio is shorter than a beat at that tempo".into());
+        }
+        use sha2::{Digest, Sha256};
+        let id: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
+        let meta = LoopMeta {
+            id,
+            title: title.to_string(),
+            bpm,
+            beats,
+            sample_rate: rate,
+            frames: wav.left.len(),
+            channels: if wav.right.is_some() { 2 } else { 1 },
+            source: source.to_string(),
+            kind: "input".into(),
+            created: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs() as i64),
+            row: false,
+            from: String::new(),
+        };
+        self.save(&meta, &wav.left, wav.right.as_deref()).map_err(|e| e.to_string())?;
+        Ok(meta)
     }
 
     /// Delete an entry's files. Returns whether there was one.
