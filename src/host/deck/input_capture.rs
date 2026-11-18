@@ -368,6 +368,7 @@ impl Engine {
             let _ = lib.write_meta(&m2);
         }
         let (id, title) = (m.id.clone(), m.title.clone());
+        let made = m.is_made();
         self.add_clip(
             ClipSpec {
                 id: m.id,
@@ -376,7 +377,7 @@ impl Engine {
                 beats: m.beats,
                 start_beat: 0.0,
                 from: m.from,
-                from_input: m.kind == "input",
+                from_input: m.kind == "input" && !made,
                 locked: false,
                 saved: true,
             },

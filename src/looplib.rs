@@ -89,6 +89,12 @@ pub struct LoopMeta {
 }
 
 impl LoopMeta {
+    /// Whether the loop was made rather than recorded from an input: a rendered vocal line or
+    /// hook, an imported WAV. It names its own tempo, and the app does not look for a beat in it.
+    pub fn is_made(&self) -> bool {
+        self.kind == "made" || matches!(self.source.as_str(), "vox" | "vocal" | "import")
+    }
+
     pub fn to_json(&self) -> JsonValue {
         let mut o = JsonObject::new();
         o.set("schema", JsonValue::str(LOOP_SCHEMA));
