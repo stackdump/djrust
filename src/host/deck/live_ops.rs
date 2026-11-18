@@ -196,11 +196,49 @@ impl Engine {
     }
 
     fn live_vocoder_on(&mut self, p: &JsonValue) -> Result<(), String> {
+        if let Some(v) = p.get("voice").map(text) {
+            self.vocoder_voice(&v)?;
+        }
+        // `voice` / `voice:NAME` as a source: the synth, singing (NAME, else robot-choir)
+        let sung = |spec: &str| -> Option<String> {
+            let rest = spec.strip_prefix("voice")?;
+            match rest.strip_prefix(':') {
+                Some(n) => Some(n.into()),
+                None if rest.is_empty() => Some(String::new()),
+                None => None,
+            }
+        };
         if let Some(spec) = p.get("modulator").map(text) {
+            let spec = match sung(&spec) {
+                Some(n) => {
+                    if n.is_empty() {
+                        if self.vocoder.settings.voice == 0 {
+                            self.vocoder_voice("robot-choir")?;
+                        }
+                    } else {
+                        self.vocoder_voice(&n)?;
+                    }
+                    "synth".into()
+                }
+                None => spec,
+            };
             let pick = self.live_mod_pick(&spec)?;
             self.vocoder_modulator(pick)?;
         }
         if let Some(spec) = p.get("carrier").map(text) {
+            let spec = match sung(&spec) {
+                Some(n) => {
+                    if n.is_empty() {
+                        if self.vocoder.settings.voice == 0 {
+                            self.vocoder_voice("robot-choir")?;
+                        }
+                    } else {
+                        self.vocoder_voice(&n)?;
+                    }
+                    "synth".into()
+                }
+                None => spec,
+            };
             let pick = self.live_car_pick(&spec)?;
             self.vocoder_carrier(pick)?;
         }

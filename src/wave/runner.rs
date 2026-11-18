@@ -40,6 +40,7 @@ use super::event_ring::LatestRing;
 use super::fire::{FireEvent, FireFlags, TickAnchor, TickAnchorFlags};
 use super::groove::{groove_hash, Drift, FeelTable, GrooveTemplate, HitRecord, Voice, STEPS};
 use super::instruments::InstrumentTable;
+use crate::fx::formant;
 use super::macros::{MacroTargets, NetMacro};
 use super::marking_mirror::MarkingMirror;
 #[cfg(feature = "transfer")]
@@ -575,6 +576,8 @@ pub struct Lane {
     held_note: Vec<i64>,
     // pluck engine: one delay line of `dmax` samples per voice, all in `dl`
     is_pluck: bool,
+    /// The `"formant"` engine (`fx::formant`): every pooled voice sings. None on any other lane.
+    formant: Option<FormantLane>,
     dl: Vec<f32>,
     dmax: usize,
     dw: Vec<usize>,
@@ -714,6 +717,42 @@ pub struct Lane {
     base_pm_mul: f64,
 }
 
+/// A formant lane's voices (`fx::formant`): one per pooled voice, the lane's params, the vowel
+/// its plain notes sing, and the syllable of the note being struck.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "transfer", derive(serde::Serialize, serde::Deserialize))]
+struct FormantLane {
+    params: formant::VoiceParams,
+    voices: Vec<formant::FormantVoice>,
+    vowel: f64,
+    /// The struck note's syllable code (0: none), set by `hit` just before `trigger`.
+    pending: u16,
+}
+
+impl FormantLane {
+    fn new(params: formant::VoiceParams, poly: usize, seed: i64) -> FormantLane {
+        FormantLane {
+            params,
+            voices: (0..poly)
+                .map(|k| {
+                    formant::FormantVoice::new(
+                        (noise_seed(seed) as u32) ^ ((k as u32 + 1).wrapping_mul(0x9E37_79B9)),
+                    )
+                })
+                .collect(),
+            vowel: params.vowel,
+            pending: 0,
+        }
+    }
+
+    fn strike(&mut self, v: usize, hz: f64, sr: f64) {
+        let syl = formant::Syllable::from_code(self.pending);
+        self.pending = 0;
+        let p = self.params;
+        self.voices[v].start_at(&p, hz, syl, Some(self.vowel), sr);
+    }
+}
+
 impl Lane {
     fn new(voice: VoiceSpec, sr: f64, tonal: bool) -> Lane {
         let mut st = [0.0; STATE_SIZE];
@@ -751,6 +790,7 @@ impl Lane {
             hold: Vec::new(),
             held_note: Vec::new(),
             is_pluck: false,
+            formant: None,
             dl: Vec::new(),
             dmax: 0,
             dw: Vec::new(),
@@ -1127,6 +1167,37 @@ impl Lane {
         self.is_pluck
     }
 
+    /// Is this lane a formant voice (the `"formant"` engine)?
+    pub fn is_formant(&self) -> bool {
+        self.formant.is_some()
+    }
+
+    /// The vowel a formant lane's notes without a syllable sing (None: not a formant lane).
+    pub fn vowel(&self) -> Option<f64> {
+        self.formant.as_ref().map(|f| f.vowel)
+    }
+
+    /// A formant lane's vowel, live: notes without a syllable sing it from now on, and the
+    /// sounding voices glide to it. False on any other lane. Allocation-free.
+    pub fn set_vowel(&mut self, v: f64, sr: f64) -> bool {
+        let Some(f) = self.formant.as_mut() else {
+            return false;
+        };
+        let v = if v.is_finite() {
+            v.clamp(0.0, formant::VOWEL_MAX)
+        } else {
+            0.0
+        };
+        f.vowel = v;
+        let p = f.params;
+        for k in 0..self.poly {
+            if libm::fabs(self.sd[k] + self.sa[k]) >= SILENT {
+                f.voices[k].set_vowel(&p, v, sr);
+            }
+        }
+        true
+    }
+
     /// The envelope slot (the gate's current value): tests probe it.
     pub fn envelope(&self) -> f64 {
         self.st[ENV]
@@ -1228,6 +1299,10 @@ fn tonal_lane(voice: &VoiceSpec, sr: f64, poly: usize, caches: &mut Caches, seed
         };
         lane.pluck_a = 1.0 - libm::exp(-TAU * fc / sr);
     }
+    if voice.engine == "formant" {
+        let params = voice.formant.unwrap_or_default();
+        lane.formant = Some(FormantLane::new(params, poly, seed));
+    }
     lane.vib_inc = voice.vibrato_rate / sr;
     if !lane.is_pluck {
         // every wavetable lane can sweep (the sound panel turns it on live): its multipliers,
@@ -1275,7 +1350,7 @@ fn tonal_lane(voice: &VoiceSpec, sr: f64, poly: usize, caches: &mut Caches, seed
 /// `.subtractive`: give a saw / square lane its band-limited tables and filter envelope
 /// (`shapeVoice`; the tables are `MipTables::shared`).
 pub(super) fn shape_voice(lane: &mut Lane, group: &str, plucked: &BTreeSet<String>, sr: f64) {
-    if lane.is_pluck {
+    if lane.is_pluck || lane.formant.is_some() {
         return;
     }
     let Some(f) = FilterEnvelope::for_voice(&lane.voice, group, plucked) else {
@@ -1303,7 +1378,7 @@ pub(super) fn shape_voice(lane: &mut Lane, group: &str, plucked: &BTreeSet<Strin
 /// when the pair is unfiltered (a filtered pair shares one filter: its difference would not be)
 /// (`detune`).
 pub(super) fn detune(lane: &mut Lane, group: &str, wide: bool, design: &VoiceDesign, sr: f64) {
-    if lane.is_pluck {
+    if lane.is_pluck || lane.formant.is_some() {
         return;
     }
     let Some(c) = Unison::cents(&lane.voice, group) else {
@@ -1330,7 +1405,7 @@ pub(super) fn detune(lane: &mut Lane, group: &str, wide: bool, design: &VoiceDes
 
 /// `.subOctave`: give a synth bass lane a sine per voice an octave down (`addSubOctave`).
 pub(super) fn add_sub_octave(lane: &mut Lane, sr: f64) {
-    if !lane.is_tonal || lane.is_pluck {
+    if !lane.is_tonal || lane.is_pluck || lane.formant.is_some() {
         return;
     }
     lane.sub_phase = vec![0.0; lane.poly];
@@ -2465,6 +2540,10 @@ fn strike(lane: &mut Lane, sr: f64, v: usize, note: i64, sweep_x: f64) {
         // centred at A3 and below (the pair's beating would widen the low mids), full from C5
         lane.uni_width[v] = lane.uni_max * (((note - 57) as f64) / 15.0).clamp(0.0, 1.0);
     }
+    if let Some(f) = lane.formant.as_mut() {
+        f.strike(v, lane.inc[v] * sr, sr);
+        return;
+    }
     if !lane.is_pluck {
         return;
     }
@@ -2703,6 +2782,9 @@ fn hit(
             frame,
             lane: lane.uid,
         });
+    }
+    if let Some(f) = lane.formant.as_mut() {
+        f.pending = n.syllable.get(t).copied().unwrap_or(0);
     }
     trigger(lane, sr, note, w, dur_ms, sweep_x);
     None
@@ -2997,6 +3079,14 @@ fn lane_sample(lanes: &mut [Lane], li: usize, sr: f64, mix: &mut Mix) {
         lane.sa[k] = sa * am;
         if lane.is_pluck {
             let y = env * pluck_sample(lane, k, fmk * vib);
+            out += y;
+            if spread {
+                side += y * lane.voice_pan[k];
+            }
+            continue;
+        }
+        if let Some(f) = lane.formant.as_mut() {
+            let y = env * f.voices[k].sample(&f.params, fmk * vib, sr);
             out += y;
             if spread {
                 side += y * lane.voice_pan[k];
@@ -3580,6 +3670,55 @@ impl WaveRunner {
             }
         }
         took
+    }
+
+    /// The vowel of the formant voices (`voice-*` instruments, `fx::formant`) of net `net_id`,
+    /// or of every net when None, live: their plain notes sing vowel position `v` (0 a .. 6 oo)
+    /// from now on and the notes sounding glide there. The project queued for the bar takes it
+    /// too. How many lanes took it (0: no formant voice there). Allocation-free.
+    pub fn set_vowel(&mut self, net_id: Option<&str>, v: f64) -> usize {
+        let sr = self.sample_rate;
+        let mut took = 0;
+        for proj in [self.current.as_mut(), self.pending.as_mut()].into_iter().flatten() {
+            for lane in proj.lanes.iter_mut() {
+                if net_id.is_some_and(|id| lane.net_id != id) {
+                    continue;
+                }
+                if lane.set_vowel(v, sr) {
+                    took += 1;
+                }
+            }
+        }
+        took
+    }
+
+    /// [`set_vowel`](Self::set_vowel) with the net named by `strHash(netId)` (None: every net),
+    /// as the deck's render thread gets it.
+    pub fn set_vowel_hash(&mut self, hash: Option<i32>, v: f64) -> usize {
+        let sr = self.sample_rate;
+        let mut took = 0;
+        for proj in [self.current.as_mut(), self.pending.as_mut()].into_iter().flatten() {
+            for lane in proj.lanes.iter_mut() {
+                if hash.is_some_and(|h| super::net::str_hash(&lane.net_id) != h) {
+                    continue;
+                }
+                if lane.set_vowel(v, sr) {
+                    took += 1;
+                }
+            }
+        }
+        took
+    }
+
+    /// The vowel positions of the running project's formant lanes: (net id, vowel).
+    pub fn vowels(&self) -> Vec<(String, f64)> {
+        let Some(p) = self.current.as_ref() else {
+            return Vec::new();
+        };
+        p.lanes
+            .iter()
+            .filter_map(|l| l.vowel().map(|v| (l.net_id.clone(), v)))
+            .collect()
     }
 
     /// `WaveProject.generation` of the project the clock is running (0: none).

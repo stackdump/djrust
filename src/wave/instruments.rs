@@ -49,7 +49,7 @@ impl InstrumentTable {
         Some(InstrumentTable { entries })
     }
 
-    /// Sorted names.
+    /// Sorted names (the table's; the formant voices are [`crate::fx::formant::instrument_names`]).
     pub fn names(&self) -> Vec<&str> {
         self.entries.keys().map(String::as_str).collect()
     }
@@ -57,6 +57,11 @@ impl InstrumentTable {
     /// The voice for an instrument: its family voice, overlaid by its entry if it has one.
     pub fn voice(&self, instrument: Option<&str>, group: Option<&str>) -> VoiceSpec {
         let mut v = tonal_voice(instrument, group);
+        // `voice-<preset>`: a formant voice (`fx::formant`), beyond beats and the table
+        if let Some(p) = instrument.and_then(crate::fx::formant::instrument_preset) {
+            v.sing(p.params);
+            return v;
+        }
         if let Some(e) = instrument.and_then(|n| self.entries.get(n)) {
             v.overlay(e);
         }

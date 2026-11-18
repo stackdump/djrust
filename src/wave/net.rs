@@ -95,6 +95,10 @@ pub struct CompiledNet {
     pub vel: Vec<i64>,
     pub dur_ms: Vec<f64>,
     pub dur_steps: Vec<f64>,
+    /// The syllable a formant voice sings on each MIDI-bound transition
+    /// ([`crate::fx::formant::Syllable::code`]; 0: none).
+    #[cfg_attr(feature = "transfer", serde(default))]
+    pub syllable: Vec<u16>,
     /// MIDI channel of every MIDI-bound transition: the binding's, else the track's (what
     /// picks its voice). 0 for transitions without a binding.
     pub channel: Vec<u8>,
@@ -227,6 +231,7 @@ impl CompiledNet {
         let mut vel = vec![0i64; n_trans];
         let mut dur_ms = vec![0.0; n_trans];
         let mut dur_steps = vec![0.0; n_trans];
+        let mut syllable = vec![0u16; n_trans];
         let mut channel = vec![0u8; n_trans];
         let mut action = vec![ControlAction::None; n_trans];
         let mut action_note = vec![0i64; n_trans];
@@ -238,6 +243,7 @@ impl CompiledNet {
                 vel[i] = b.velocity as i16 as i64;
                 dur_ms[i] = b.duration as f64;
                 dur_steps[i] = b.duration_steps as f64;
+                syllable[i] = b.syllable;
                 let ch = if b.channel != 0 {
                     b.channel
                 } else {
@@ -324,6 +330,7 @@ impl CompiledNet {
             vel,
             dur_ms,
             dur_steps,
+            syllable,
             channel,
             action,
             action_note,

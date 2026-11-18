@@ -108,6 +108,12 @@ pub enum Command {
     },
     /// A channel's voice settings, from the sound panel.
     Voice(VoiceLaneParams),
+    /// The vowel of the formant voices (`voice-*` instruments) of the net with this
+    /// `strHash(netId)`, or of every net when `hash` is None (`WaveRunner::set_vowel`).
+    Vowel {
+        hash: Option<i32>,
+        vowel: f32,
+    },
     /// The FX unit: a control, a reset, the kill.
     FxUnit(FxUnitCommand),
     /// A hand on the platter (the jog's touch): the net clock follows the hand.
@@ -889,6 +895,9 @@ impl DeckCore {
             }
             Command::MasterFx { key, value } => self.fx.set_slider(key, value as f64),
             Command::Voice(p) => self.runner.set_voice(&p),
+            Command::Vowel { hash, vowel } => {
+                self.runner.set_vowel_hash(hash, vowel as f64);
+            }
             // the FX unit is on whichever chain the deck plays through now (`sendFxUnit`)
             Command::FxUnit(u) if self.sample_mode => {
                 self.sample_bus.send(LoopMasterCommand::FxUnit(u))

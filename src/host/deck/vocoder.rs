@@ -226,6 +226,8 @@ pub(crate) struct VocoderStrip {
     vocoder: Vocoder,
     formant: FormantFilter,
     synth: CarrierSynth,
+    /// The synth singing (`settings.voice` > 0): the formant voice on the synth's notes.
+    voice: crate::fx::formant::FormantSynth,
     pub(crate) modt: ModTap,
     pub(crate) cart: CarTap,
     mod_loop: LoopPlayer,
@@ -265,6 +267,10 @@ impl VocoderStrip {
             vocoder: Vocoder::new(sample_rate, &settings),
             formant: FormantFilter::new(sample_rate, settings.vowel),
             synth: CarrierSynth::new(sample_rate),
+            voice: crate::fx::formant::FormantSynth::new(
+                sample_rate,
+                crate::fx::formant::PRESETS[0].params,
+            ),
             settings,
             modt: ModTap::None,
             cart: CarTap::None,
@@ -294,6 +300,15 @@ impl VocoderStrip {
                 self.vocoder.configure(&s);
                 self.formant.set_vowel(s.vowel);
                 self.synth.set_level(s.synth_level);
+                self.voice.set_level(s.synth_level);
+                if s.voice != self.settings.voice {
+                    if let Some(p) = s.voice_preset() {
+                        self.voice.set_params(p.params);
+                        self.voice.set_vowel(s.vowel);
+                    }
+                } else if s.vowel != self.settings.vowel {
+                    self.voice.set_vowel(s.vowel);
+                }
                 if s.synth != self.settings.synth || s.synth_detune != self.settings.synth_detune {
                     self.synth.set_patch(&s.synth);
                     self.synth.set_detune(s.synth_detune);
@@ -309,9 +324,18 @@ impl VocoderStrip {
             VocoderMsg::LoopRate(r) => self.mod_loop.set_rate(r),
             VocoderMsg::CarrierLoop(b) => return self.car_loop.load(b),
             VocoderMsg::CarrierLoopRate(r) => self.car_loop.set_rate(r),
-            VocoderMsg::NoteOn(n) => self.synth.note_on(n),
-            VocoderMsg::NoteOff(n) => self.synth.note_off(n),
-            VocoderMsg::AllOff => self.synth.all_off(),
+            VocoderMsg::NoteOn(n) => {
+                self.synth.note_on(n);
+                self.voice.note_on(n);
+            }
+            VocoderMsg::NoteOff(n) => {
+                self.synth.note_off(n);
+                self.voice.note_off(n);
+            }
+            VocoderMsg::AllOff => {
+                self.synth.all_off();
+                self.voice.all_off();
+            }
         }
         None
     }
@@ -347,7 +371,11 @@ impl VocoderStrip {
             }
             (ModTap::Synth, _) => {
                 self.m[..n].fill(0.0);
-                self.synth.render(&mut self.m[..n]);
+                if self.settings.voice > 0 {
+                    self.voice.render(&mut self.m[..n]);
+                } else {
+                    self.synth.render(&mut self.m[..n]);
+                }
                 true
             }
             _ => {
@@ -375,7 +403,11 @@ impl VocoderStrip {
             }
             (_, CarTap::Synth) => {
                 self.l[..n].fill(0.0);
-                self.synth.render(&mut self.l[..n]);
+                if self.settings.voice > 0 {
+                    self.voice.render(&mut self.l[..n]);
+                } else {
+                    self.synth.render(&mut self.l[..n]);
+                }
                 self.r[..n].copy_from_slice(&self.l[..n]);
             }
             (_, CarTap::Loop) => {
@@ -917,6 +949,27 @@ impl Engine {
             o.set(p.name(), JsonValue::Number(self.vocoder.settings.get(p)));
         }
         self.vocoder_trace(key, text, false, JsonValue::Object(o));
+    }
+
+    /// The synth sings (`fx::formant`): `name` a voice preset (robot, robot-choir, choir-aah,
+    /// …), or `off` for the oscillator synth again. Its notes, level and vowel (the `vowel`
+    /// knob) are the synth's; as the carrier it is a robot choir the modulator talks through.
+    pub fn vocoder_voice(&mut self, name: &str) -> Result<(), String> {
+        let mut s = self.vocoder.settings.clone();
+        s.set_voice(name)?;
+        if s.voice == self.vocoder.settings.voice {
+            return Ok(());
+        }
+        self.vocoder.settings = s.clone();
+        let label = s.voice_preset().map_or("off", |p| p.name);
+        self.vocoder_send(VocoderMsg::Settings(s));
+        self.vocoder_trace(
+            "voice",
+            format!("vocoder voice {label}"),
+            false,
+            live_params([("voice", JsonValue::from(label))]),
+        );
+        Ok(())
     }
 
     /// Set a vocoder knob in its own units (clamped). Returns the value kept.
@@ -1793,6 +1846,9 @@ impl Engine {
             if s.get(p) != fresh.get(p) {
                 o.set(p.name(), JsonValue::Number(s.get(p)));
             }
+        }
+        if let Some(vp) = s.voice_preset() {
+            o.set("voice", vp.name.into());
         }
         if !v.notes.is_empty() {
             o.set(

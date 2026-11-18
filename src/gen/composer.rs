@@ -29,6 +29,7 @@ use crate::gen::variety::{
     add_chorus, apply_modal_interchange, call_response_melody, drum_fill_net, ghost_note_hihat,
     tension_for_variant, walking_bass_line,
 };
+use crate::gen::vox::{vox_net, vox_sections, VoxStyle, VOX_NET};
 use crate::json::{floor, js_round, js_to_int32, JsonObject, JsonValue};
 use crate::pflow::{OrderedMap, Project};
 use crate::rng::Mulberry32;
@@ -794,6 +795,30 @@ pub fn compose(genre_name: &str, ov: &JsonValue) -> Project {
             }
         }
 
+        // `vox` (dj-only): the sung part, after every other net, in the melodic sections
+        if let Some(style) = VoxStyle::from_override(get("vox"), genre_name) {
+            proj.nets.insert(
+                VOX_NET,
+                vox_net(style, genre_name, genre, seed, bpm, theme.as_ref()),
+            );
+            vox_instrument(&mut proj, get("instruments"));
+            let names: Vec<(String, bool)> = tmpl
+                .sections
+                .iter()
+                .map(|s| {
+                    let melodic = s.active.keys().iter().any(|r| {
+                        r == "melody" || r == "harmony" || r == "arp" || r == "chorus"
+                    });
+                    (s.name.clone(), melodic)
+                })
+                .collect();
+            for (sec, on) in tmpl.sections.iter_mut().zip(vox_sections(&names)) {
+                if on {
+                    sec.active.set(VOX_NET);
+                }
+            }
+        }
+
         let music_nets: Vec<String> = proj.nets.keys().to_vec();
         proj.initial_mutes = song_structure(&mut proj, &tmpl, &music_nets);
         let total_steps: i64 = proj.structure.iter().map(|s| s.steps).sum();
@@ -831,6 +856,15 @@ pub fn compose(genre_name: &str, ov: &JsonValue) -> Project {
         return proj;
     }
 
+    // `vox` (dj-only): the sung part, after every other net
+    if let Some(style) = VoxStyle::from_override(get("vox"), genre_name) {
+        proj.nets.insert(
+            VOX_NET,
+            vox_net(style, genre_name, genre, seed, bpm, theme.as_ref()),
+        );
+        vox_instrument(&mut proj, get("instruments"));
+    }
+
     // Loop mode: fade-in/out/break
     let mut melodic: Vec<String> = alloc::vec!["bass".into(), "melody".into()];
     if proj.nets.contains_key("arp") {
@@ -861,6 +895,20 @@ pub fn compose(genre_name: &str, ov: &JsonValue) -> Project {
     ensure_group_and_instrument_set(&mut proj);
     proj.stamp_duration_steps();
     proj
+}
+
+/// The `instruments` override's `vox` entry on the vox net (it is added after the others are
+/// overridden).
+fn vox_instrument(proj: &mut Project, instruments: Option<&JsonValue>) {
+    if let Some(n) = instruments
+        .and_then(|i| i.get(VOX_NET))
+        .and_then(JsonValue::as_str)
+        .filter(|n| !n.is_empty())
+    {
+        if let Some(nb) = proj.nets.get_mut(VOX_NET) {
+            nb.track.instrument = n.into();
+        }
+    }
 }
 
 /// Convenience: `compose` with an overrides object built from pairs.

@@ -46,6 +46,7 @@ pub mod tricks;
 pub mod true_peak;
 pub mod unit;
 pub mod eurosynth;
+pub mod formant;
 pub mod granular;
 pub mod vocoder;
 

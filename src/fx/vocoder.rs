@@ -487,6 +487,10 @@ pub struct VocoderSettings {
     pub insert: bool,
     pub mute: bool,
     pub pfl: bool,
+    /// The internal synth sings instead (`fx::formant`): 0 off (the oscillator synth), k the
+    /// formant preset `PRESETS[k - 1]`. Its vowel is `vowel` (a e i o u), its level
+    /// `synth_level`, its notes the synth's.
+    pub voice: u8,
 }
 
 impl Default for VocoderSettings {
@@ -511,11 +515,38 @@ impl Default for VocoderSettings {
             insert: false,
             mute: false,
             pfl: false,
+            voice: 0,
         }
     }
 }
 
 impl VocoderSettings {
+    /// The formant preset the synth sings with (None: the oscillator synth).
+    pub fn voice_preset(&self) -> Option<&'static super::formant::VoicePreset> {
+        (self.voice as usize)
+            .checked_sub(1)
+            .and_then(|k| super::formant::PRESETS.get(k))
+    }
+
+    /// `voice` by preset name (`off` / `none` / empty: the oscillator synth). Err: no such
+    /// preset.
+    pub fn set_voice(&mut self, name: &str) -> Result<(), String> {
+        let n = name.trim();
+        if n.is_empty() || n == "off" || n == "none" || n == "synth" {
+            self.voice = 0;
+            return Ok(());
+        }
+        let p = super::formant::preset(n).ok_or_else(|| {
+            let names: Vec<&str> = super::formant::PRESETS.iter().map(|p| p.name).collect();
+            alloc::format!("no voice {n:?} (off, {})", names.join(", "))
+        })?;
+        self.voice = super::formant::PRESETS
+            .iter()
+            .position(|q| q.name == p.name)
+            .map_or(0, |k| k as u8 + 1);
+        Ok(())
+    }
+
     pub fn get(&self, p: VocoderParam) -> f64 {
         match p {
             VocoderParam::Bands => self.bands as f64,
@@ -610,6 +641,11 @@ impl VocoderSettings {
         o.set("xfade", self.xfade.into());
         o.set("mute", self.mute.into());
         o.set("pfl", self.pfl.into());
+        o.set(
+            "voice",
+            self.voice_preset()
+                .map_or(JsonValue::Null, |p| JsonValue::from(p.name)),
+        );
         JsonValue::Object(o)
     }
 }

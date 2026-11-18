@@ -190,8 +190,26 @@ impl NetBundle {
                 velocity,
                 duration,
                 duration_steps: 0,
+                syllable: 0,
             },
         );
+    }
+
+    /// [`bind`](Self::bind) a note that a formant voice sings as `syllable` (`"a"`, `"da"`;
+    /// one that does not parse binds a plain note).
+    pub fn bind_sung(
+        &mut self,
+        transition: i64,
+        note: i64,
+        channel: i64,
+        velocity: i64,
+        duration: i64,
+        syllable: &str,
+    ) {
+        self.bind(transition, note, channel, velocity, duration);
+        if let Some(b) = self.bindings.get_mut(&format!("t{transition}")) {
+            b.syllable = crate::fx::formant::Syllable::parse(syllable).map_or(0, |s| s.code());
+        }
     }
 }
 

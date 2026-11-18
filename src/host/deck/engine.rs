@@ -1767,6 +1767,14 @@ impl Engine {
     pub fn set_voice(&mut self, deck: &str, p: VoiceLaneParams) -> bool {
         self.command(deck, Command::Voice(p))
     }
+    /// The vowel (a position, 0 a .. 6 oo: `fx::formant`) of the formant voices on `deck`, of
+    /// net `net` or of every net: their plain notes sing it from now on and the notes sounding
+    /// glide there. False: no such deck.
+    pub fn set_vowel(&mut self, deck: &str, net: Option<&str>, vowel: f64) -> bool {
+        let hash = net.map(crate::wave::net::str_hash);
+        let vowel = vowel.clamp(0.0, crate::fx::formant::VOWEL_MAX) as f32;
+        self.command(deck, Command::Vowel { hash, vowel })
+    }
     /// Toggle a role (`Deck.toggleRole`): a disabled role stays off.
     pub fn toggle_role(&mut self, deck: &str, role: &str) -> bool {
         let Some(d) = self.deck(deck) else {

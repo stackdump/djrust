@@ -1174,3 +1174,69 @@ fn uses_synth_follows_either_side_per_instance_and_survives_a_swap() {
     g.e.vocoder_modulator(ModulatorPick::Synth).unwrap();
     assert!(g.e.vocoder.uses_synth(), "synth modulator alone");
 }
+
+/// The synth sings (`voice`, `fx::formant`): a robot choir as the carrier, the mic talking
+/// through it; set by name or by the live op's `carrier: "voice:NAME"`, logged, replayed by the
+/// setup ops, and allocation-free on the render thread.
+#[test]
+fn the_voice_carrier_is_a_robot_choir_the_mic_talks_through() {
+    use djrust::json::JsonValue;
+    let mut g = Rig::new();
+    g.talking = false;
+    g.e.set_input_volume(TD3, 0.0);
+    g.e.vocoder_carrier(CarrierPick::Synth).unwrap();
+    g.e.vocoder_switch(VocoderSwitch::On, true);
+    g.e.vocoder_set(VocoderParam::Volume, 1.0);
+    g.e.vocoder_set_notes(&[57, 60, 64]);
+    g.run(200);
+    let synth = g.out.clone();
+    g.e.trace = Some(Vec::new());
+    g.e.vocoder_voice("choir-aah").unwrap();
+    assert_eq!(g.e.vocoder.settings.voice_preset().unwrap().name, "choir-aah");
+    let t = g.e.trace.take().unwrap();
+    assert_eq!(t[0].entry.text, "vocoder voice choir-aah");
+    g.run(200);
+    let sung = g.level();
+    assert!(sung > 0.01, "the choir on V {sung}");
+    assert_ne!(synth, g.out, "the voice is not the oscillator synth");
+    // the vowel knob moves it
+    let before = g.out.clone();
+    g.e.vocoder_set(VocoderParam::Vowel, 2.0);
+    g.run(200);
+    assert_ne!(before, g.out);
+    // the mic talks through it
+    g.talking = true;
+    g.e.vocoder_modulator(ModulatorPick::Input(MIC)).unwrap();
+    g.run(200);
+    assert!(g.level() > 0.002, "vocoded choir {}", g.level());
+    // no allocation once it runs
+    let (mut l, mut r) = (vec![0f32; BLOCK], vec![0f32; BLOCK]);
+    g.r.render_block(&mut l, &mut r);
+    ALLOCS.with(|c| c.set(0));
+    ON.with(|o| o.set(true));
+    for _ in 0..50 {
+        g.r.render_block(&mut l, &mut r);
+    }
+    ON.with(|o| o.set(false));
+    assert_eq!(ALLOCS.with(|c| c.get()), 0);
+    // state, setup ops, the live op, refusal, off
+    assert_eq!(
+        g.e.vocoder.settings.to_json().get("voice").and_then(JsonValue::as_str),
+        Some("choir-aah")
+    );
+    let ops = g.e.vocoder_setup_ops();
+    match &ops[0] {
+        djrust::session::arrangement::ArrangeOp::Live { params, .. } => {
+            assert_eq!(params.get("voice").and_then(JsonValue::as_str), Some("choir-aah"))
+        }
+        o => panic!("{o:?}"),
+    }
+    assert!(g.e.vocoder_voice("no-such-voice").is_err());
+    g.e.vocoder_voice("off").unwrap();
+    assert!(g.e.vocoder.settings.voice_preset().is_none());
+    let op = |s: &str| JsonValue::parse(s).unwrap();
+    g.e.apply_live_op("vocoder", &op(r#"{"carrier":"voice:robot"}"#)).unwrap();
+    assert_eq!(g.e.vocoder.carrier, CarrierSource::Synth);
+    assert_eq!(g.e.vocoder.settings.voice_preset().unwrap().name, "robot");
+    assert!(g.e.apply_live_op("vocoder", &op(r#"{"carrier":"voice:nobody"}"#)).is_err());
+}

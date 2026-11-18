@@ -12,6 +12,7 @@ pub mod tables;
 pub mod techniques;
 pub mod theme;
 pub mod variety;
+pub mod vox;
 
 pub use composer::{compose, compose_with, fallback_instrument_set, generate_track_name};
 pub use tables::BeatsTables;

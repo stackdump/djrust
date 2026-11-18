@@ -81,6 +81,10 @@ pub struct VoiceSpec {
     pub pitch_from: f64,
     pub pitch_to: f64,
     pub pitch_time: f64,
+    /// The `"formant"` engine's voice (`fx::formant`): set by a `voice-<preset>` instrument or
+    /// a `"voicePreset"` overlay. None on every other voice.
+    #[cfg_attr(feature = "transfer", serde(default))]
+    pub formant: Option<crate::fx::formant::VoiceParams>,
 }
 
 impl VoiceSpec {
@@ -116,7 +120,21 @@ impl VoiceSpec {
             pitch_from: 1.0,
             pitch_to: 1.0,
             pitch_time: 0.0,
+            formant: None,
         }
+    }
+
+    /// Make this a formant voice singing `params` (engine `"formant"`), with a sung note's
+    /// envelope: a soft attack and a long, held decay.
+    pub fn sing(&mut self, params: crate::fx::formant::VoiceParams) {
+        self.engine = "formant".into();
+        self.formant = Some(params);
+        self.attack = 0.03;
+        self.decay_scale = 1.1;
+        self.max_decay = 4.0;
+        self.level = 0.16;
+        self.vibrato_rate = 0.0;
+        self.vibrato_depth = 0.0;
     }
 
     /// Decode the JSON shape synth.js emits (tests and voice overrides): `VoiceSpec(json:)`.
@@ -210,6 +228,13 @@ impl VoiceSpec {
         }
         if let Some(x) = n("pitchTime") {
             self.pitch_time = x;
+        }
+        if let Some(p) = v
+            .get("voicePreset")
+            .and_then(JsonValue::as_str)
+            .and_then(crate::fx::formant::preset)
+        {
+            self.sing(p.params);
         }
     }
 }

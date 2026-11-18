@@ -160,6 +160,11 @@ pub struct MidiBinding {
     pub duration: i64,
     /// Sixteenth steps; canonical when > 0.
     pub duration_steps: i64,
+    /// The syllable a formant voice sings on this note (`"vowel": "a"`, `"da"`, `"oo"`;
+    /// [`crate::fx::formant::Syllable::code`]), 0 = none. Beyond beats: written only when set,
+    /// so a document without one keeps its canonical text and CID.
+    #[cfg_attr(feature = "transfer", serde(default))]
+    pub syllable: u16,
 }
 
 #[derive(Clone, Debug)]
@@ -554,6 +559,11 @@ impl NetBundle {
             velocity: get_int(m, "velocity", self.track.default_velocity),
             duration: get_int(m, "duration", 100),
             duration_steps: get_int(m, "durationSteps", 0),
+            syllable: m
+                .and_then(|m| m.get("vowel"))
+                .and_then(JsonValue::as_str)
+                .and_then(crate::fx::formant::Syllable::parse)
+                .map_or(0, |s| s.code()),
         }
     }
 }
@@ -837,6 +847,9 @@ impl NetBundle {
                 } else if m.duration != 100 {
                     midi.set("duration", m.duration.into());
                 }
+                if let Some(v) = m.vowel_text() {
+                    midi.set("vowel", v.into());
+                }
                 o.set("midi", midi.into());
             }
             if let Some(c) = self.control_bindings.get(label) {
@@ -916,6 +929,9 @@ impl NetBundle {
                     midi.set("durationSteps", m.duration_steps.into());
                 } else {
                     midi.set("duration", m.duration.into());
+                }
+                if let Some(v) = m.vowel_text() {
+                    midi.set("vowel", v.into());
                 }
                 o.set("midi", midi.into());
             }
@@ -1043,6 +1059,11 @@ pub fn resolve_duration_ms(duration_steps: Option<f64>, duration: Option<f64>, b
 }
 
 impl MidiBinding {
+    /// The syllable as a document writes it (`"da"`), None when the note has none.
+    pub fn vowel_text(&self) -> Option<String> {
+        crate::fx::formant::Syllable::from_code(self.syllable).map(|s| s.text())
+    }
+
     pub fn resolved_duration_ms(&self, bpm: f64) -> f64 {
         resolve_duration_ms(
             Some(self.duration_steps as f64),
