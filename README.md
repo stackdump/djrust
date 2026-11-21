@@ -1,11 +1,17 @@
 # djrust
 
-**djrust is the bitwrap audio engine.** It composes, plays and mixes the deterministic generative
-tracks behind [beats.bitwrap.io](https://beats.bitwrap.io): give it a genre, a seed and a structure,
-and it writes the track (a Petri-net project), runs it on its wave engine, and renders the audio.
-The same input renders the same samples, bit for bit, in a browser, on Android, on iOS and on the
-desktop. One crate holds the engine and a thin adapter for each of those platforms, behind cargo
-features, so each app pulls in only the adapter it needs.
+**djrust is the DJ Rust audio engine behind [BeatScript](https://beatscript.app) and
+[beats.bitwrap.io](https://beats.bitwrap.io).** BeatScript is a small language for writing whole
+music tracks as text, and beatscript.app is where you write, play and share them; this crate is
+the engine that turns a track into sound there. It composes, plays and mixes deterministic
+generative tracks: give it a genre, a seed and a structure, and it writes the track (a Petri-net
+project), runs it on its wave engine, and renders the audio. The same input renders the same
+samples, bit for bit, in a browser, on Android, on iOS and on the desktop. One crate holds the
+engine and a thin adapter for each of those platforms, behind cargo features, so each app pulls in
+only the adapter it needs.
+
+The BeatScript language itself (parser, checker and the beatscript.app services) is not part of
+this crate; djrust is the engine it runs on.
 
 ## What it does
 
@@ -50,10 +56,22 @@ target.
 The toolchain is stable Rust (1.82 or later), and `rust-toolchain.toml` adds the wasm32 target.
 
 ```sh
+cargo build                                  # std + host (the defaults), no network
 cargo test                                   # engine + decks, ~1600 tests incl. JS and Swift goldens
+cargo test --features network                # the same with the network feature on
 cargo build --no-default-features            # the pure engine, no_std + alloc
 cargo build --no-default-features --target wasm32-unknown-unknown
 ```
+
+### The no-network build
+
+The default build has no network at all, and that is the supported way to build djrust offline or
+for an app that must not talk to anything. The crate opens no sockets and runs no processes in any
+configuration: publishing and fetching go through transports the app supplies (the `CdnTransport`
+trait in `djrust::session::publish`). The `network` feature only tells the app shell that the
+build may offer them: `Dj.features()` in the wasm facade reports `{"network": true}`, and the
+shell shows publish, fetch and sign only then. Leave it off, and every share, snapshot and session
+stays a local save / load.
 
 **Browser / npm.** `npm/` is the cdylib for the `djrust` npm package. Build it with
 `npm/build.sh`, which writes the package to `npm/pkg` and publishes nothing. The script uses
@@ -131,6 +149,11 @@ It handles did:pkh identities, and it signs shares, snapshots, invites and chart
 W3C Verifiable Credentials. It does no I/O and keeps no keys. The engine does not depend on it.
 See its [README](crates/djrust-wallet/README.md) and the
 [standards mapping](crates/djrust-wallet/docs/STANDARDS.md).
+
+## Contributing
+
+Bug reports and feature requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Outside code
+and pull requests are not accepted.
 
 ## Licence
 

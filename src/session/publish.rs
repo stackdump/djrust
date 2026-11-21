@@ -4,9 +4,9 @@
 //! pure parts of `Session/SessionPublish.swift`: the bundle, its refusal rules, the transport
 //! trait and the staging order. The directory and ssh transports are `crate::host::publish`.
 //!
-//! This mirrors beats-builder's `publish.cdn.publish_to_cdn`: stage the files into the CDN
+//! Publishing is: stage the files into the CDN
 //! master's blob tree on the CDN host, ping `/admin/reload?cid=`, and (separately, and only on
-//! request) run `mirror-push.sh`, which is what makes it public on pflow.dev.
+//! request) push the blob tree to the public mirror, which is what makes it public.
 
 use alloc::collections::BTreeMap;
 use alloc::format;
@@ -233,7 +233,7 @@ pub trait CdnTransport {
     ) -> Result<(), PublishError>;
     /// Tell the CDN master to index just this CID. Returns whether it said yes.
     fn reload(&self, cid: &str) -> Result<bool, PublishError>;
-    /// Push the master's blob tree to the public mirror (pflow.dev). This is what publishes.
+    /// Push the master's blob tree to the public mirror. This is what publishes.
     fn mirror(&self) -> Result<(), PublishError>;
 }
 

@@ -1,7 +1,7 @@
 //! Loop pairs: the rule that makes a loop's A and B go together, and the measure of it.
 //!
-//! See `docs/LOOPS.md` in djrust-vevr-se for the rule in prose. In short, a pair is a **shared
-//! frame**, a **shared call** and an **answer that does not rival it**:
+//! In short, a pair is a **shared frame**, a **shared call** and an **answer that does not rival
+//! it**:
 //!
 //! 1. *Frame*: A and B are in one key, at one tempo, the same number of bars, with the same
 //!    parts, and every part's ring divides the loop (so the loops start and end on the same

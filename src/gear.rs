@@ -467,8 +467,8 @@ mod tests {
     }
 
     #[test]
-    fn identifies_workbits_ports() {
-        // what CoreMIDI listed on workbit, 2026-11-03
+    fn identifies_coremidi_port_names() {
+        // port names as CoreMIDI lists them, 2026-11-03
         let id = |p| identify(p).map(|g| g.id);
         assert_eq!(id("MPK Mini Mk II"), Some("mpk"));
         assert_eq!(id("APC mini mk2 Control"), Some("apc"));

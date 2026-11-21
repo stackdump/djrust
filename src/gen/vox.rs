@@ -1,5 +1,5 @@
 //! `vox`: a sung part for the formant voice (`fx::formant`), an opt-in `compose` override
-//! beyond beats (COMPOSE-OPTIONS.md, docs/VOICE.md in djrust-vevr-se).
+//! beyond beats.
 //!
 //! - `"choir"`: the chord plan as a held, stacked choir, one vowel per chord (aah, ooh, …),
 //!   on a `voice-choir-*` instrument.

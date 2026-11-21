@@ -1,5 +1,4 @@
-//! A formant-synthesis voice: stylised, robotic singing with no recorded audio (beyond Swift;
-//! docs/VOICE.md in djrust-vevr-se).
+//! A formant-synthesis voice: stylised, robotic singing with no recorded audio (beyond Swift).
 //!
 //! A source (a band-limited saw, a pulse, or a glottal pulse) runs through five formant
 //! resonators, in cascade (a Klatt-style serial vocal tract: the formants' relative levels come
@@ -2066,8 +2065,8 @@ mod tests {
     /// Every consonant on its own (a cluster member, an escaped `/s/`) sounds, and sounds as its class
     /// does: a stop is a short burst (its energy early), a fricative or `h` noise (bright, many zero
     /// crossings), a nasal a dark hum (its energy low), a liquid or glide voiced (the fundamental's
-    /// harmonics), an affricate a burst then noise. The BeatScript phoneme set (docs/btw/phonemes.md in
-    /// djrust-vevr-se) says no symbol renders silent.
+    /// harmonics), an affricate a burst then noise. The BeatScript phoneme set says no symbol renders
+    /// silent.
     #[test]
     fn every_consonant_alone_sounds_as_its_class() {
         let p = preset("robot").unwrap().params;
