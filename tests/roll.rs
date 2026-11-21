@@ -511,3 +511,47 @@ fn a_big_library_is_sampled_the_same_way_every_time() {
     assert_eq!(paths.len(), 200);
     assert_eq!(layers::pool(&lib, 140.0, None, 5000).len(), 1500);
 }
+
+#[test]
+fn a_note_may_carry_the_syllable_a_formant_voice_sings_on_it() {
+    let e = env(r#"{"tempo":120,"parts":{"vox":{"instrument":"voice-robot","notes":[
+        [0,60,4,100,"wa"],{"step":4,"note":62,"dur":4,"syl":"ra+ih.t"},[8,64,4],[12,65,4,100,".s"]]}}}"#);
+    let n = net(&e, "vox");
+    let vowel = |t: &str| binding(n, t).and_then(|b| b.get("vowel")).and_then(JsonValue::as_str).map(str::to_string);
+    assert_eq!(vowel("t0").as_deref(), Some("wa"));
+    // the whole syllable: the glide and the coda ride along
+    assert_eq!(vowel("t4").as_deref(), Some("ra+ih.t"));
+    // a note without one has none, and a roll without any keeps the envelope it always had
+    assert_eq!(vowel("t8"), None);
+    assert_eq!(vowel("t12").as_deref(), Some(".s"));
+    let plain = env(r#"{"parts":{"melody":{"notes":[[0,60,4]]}}}"#);
+    assert!(!plain.canonical_js().contains("vowel"));
+    assert!(message(r#"{"parts":{"vox":{"notes":[[0,60,4,100,"xq9"]]}}}"#).contains("is not a syllable"));
+}
+
+#[test]
+fn a_sung_part_renders_and_its_syllables_change_the_sound() {
+    use djrust::host::deck::engine::EngineConfig;
+    use djrust::host::deck::host::host_engine;
+    let render = |sylls: [&str; 4]| -> Vec<f32> {
+        let notes: Vec<String> = sylls.iter().enumerate().map(|(i, s)| format!("[{},{},4,110,\"{s}\"]", i * 4, 57 + i * 2)).collect();
+        let roll = format!(r#"{{"tempo":120,"parts":{{"vox":{{"instrument":"voice-robot","notes":[{}]}}}}}}"#, notes.join(","));
+        let text = roll::envelope(&parse(&roll)).unwrap().canonical_js();
+        djrust::host::beats::render_offline(
+            || {
+                let mut cfg = EngineConfig::new(48000.0);
+                cfg.history_beats = None;
+                host_engine(cfg, false, true)
+            },
+            &text,
+            2.0,
+        )
+        .unwrap()
+    };
+    let a = render(["wa", "ra+ih.t", "sha", "oo.n"]);
+    let b = render(["a", "e", "i", "o"]);
+    let rms = |x: &[f32]| (x.iter().map(|v| (*v as f64) * (*v as f64)).sum::<f64>() / x.len().max(1) as f64).sqrt();
+    assert!(rms(&a) > 1e-3, "the sung part is silent: rms {}", rms(&a));
+    let diff: Vec<f32> = a.iter().zip(&b).map(|(x, y)| x - y).collect();
+    assert!(rms(&diff) > 1e-3, "the syllables did not change the sound");
+}

@@ -726,7 +726,7 @@ struct FormantLane {
     voices: Vec<formant::FormantVoice>,
     vowel: f64,
     /// The struck note's syllable code (0: none), set by `hit` just before `trigger`.
-    pending: u16,
+    pending: u32,
 }
 
 impl FormantLane {

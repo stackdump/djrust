@@ -520,8 +520,8 @@ impl Default for OnsetShape {
 pub const NO_VOWEL: u8 = u8::MAX;
 
 /// A syllable: an optional consonant onset into a vowel, which may glide to a second vowel (a
-/// diphthong) and end in a consonant (the coda). Packed into a `u16` on a MIDI binding
-/// ([`code`](Self::code), which carries the onset and the vowel only; 0 = none), written as text
+/// diphthong) and end in a consonant (the coda). Packed into a `u32` on a MIDI binding
+/// ([`code`](Self::code): all four; 0 = none), written as text
 /// in a document (`"vowel": "da"`).
 ///
 /// The text is `[onset]vowel[+glide][.coda]`: `da`, `sha`, `ah+ih` (the "i" of "ride"),
@@ -566,20 +566,28 @@ impl Syllable {
         }
     }
 
-    /// The packed form: `onset << 8 | (vowel + 1)`, never 0. The glide and the coda are not in
-    /// it.
-    pub fn code(self) -> u16 {
-        ((self.onset as u16) << 8) | (self.vowel as u16 + 1).min(0xff)
+    /// The packed form: `coda << 20 | (glide + 1) << 16 | onset << 8 | (vowel + 1)`, never 0.
+    /// A syllable with no glide and no coda packs as it always did (`onset << 8 | (vowel + 1)`,
+    /// under 2^16), so a code written before the glide and the coda were carried means the same.
+    pub fn code(self) -> u32 {
+        let base = ((self.onset as u32) << 8) | (self.vowel as u32 + 1).min(0xff);
+        let glide = self.glide.map_or(0, |g| (g as u32 + 1).min(0xf));
+        base | (glide << 16) | ((self.coda as u32 & 0x1f) << 20)
     }
 
     /// The packed form back (0, or a code out of range: None).
-    pub fn from_code(c: u16) -> Option<Syllable> {
+    pub fn from_code(c: u32) -> Option<Syllable> {
         let v = (c & 0xff) as usize;
-        let o = (c >> 8) as usize;
-        if v == 0 || v > VOWELS.len() || o >= Onset::ALL.len() {
+        let o = ((c >> 8) & 0xff) as usize;
+        let g = ((c >> 16) & 0xf) as usize;
+        let k = ((c >> 20) & 0x1f) as usize;
+        if v == 0 || v > VOWELS.len() || o >= Onset::ALL.len() || g > VOWELS.len() || k >= Onset::ALL.len() || c >> 25 != 0 {
             return None;
         }
-        Some(Syllable::new(Onset::ALL[o], (v - 1) as u8))
+        let mut s = Syllable::new(Onset::ALL[o], (v - 1) as u8);
+        s.glide = (g > 0).then(|| (g - 1) as u8);
+        s.coda = Onset::ALL[k];
+        Some(s)
     }
 
     /// `a`, `oo`, `da`, `roo`, `kah`, `sha`, `ah+ih.t` (case and surrounding space ignored).
@@ -2025,7 +2033,14 @@ mod tests {
         let r = Syllable::parse("ra+ih.t").unwrap();
         assert_eq!((r.onset, r.vowel, r.glide, r.coda), (Onset::R, 0, Some(8), Onset::T));
         // a plain code carries the onset and the vowel only
-        assert_eq!(Syllable::from_code(r.code()), Some(Syllable::new(Onset::R, 0)));
+        // the code carries the glide and the coda too (a net's binding sings the whole syllable), and a
+        // syllable with neither packs as it always did
+        assert_eq!(Syllable::from_code(r.code()), Some(r));
+        assert_eq!(Syllable::new(Onset::R, 0).code(), ((Onset::R as u32) << 8) | 1);
+        for s in ["fa", "ah+ih", "sha+oo.ng", "ka.z", "ih.n", "er.d", "ma.m", "ra+ih.t"] {
+            let syl = Syllable::parse(s).unwrap();
+            assert_eq!(Syllable::from_code(syl.code()).map(|x| x.text()), Some(s.to_string()), "{s}");
+        }
         assert_eq!(Syllable::parse("sha.").map(|_| ()), None);
         assert_eq!(Syllable::parse("sh"), None);
         assert!(Syllable::consonant(Onset::T).text() == ".t");
