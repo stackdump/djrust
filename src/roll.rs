@@ -75,6 +75,9 @@ struct Note {
     note: i64,
     duration: i64,
     velocity: i64,
+    /// `syl`: the syllable a formant voice (`voice-<preset>`) sings on the note
+    /// ([`crate::fx::formant::Syllable`] text: `da`, `ra+ih.t`), written as the binding's `vowel`.
+    syl: Option<crate::fx::formant::Syllable>,
 }
 
 struct Segment {
@@ -98,9 +101,9 @@ fn int(v: Option<&JsonValue>) -> Option<i64> {
 
 /// `PianoRoll.envelope`. `params`:
 /// `{name?, tempo?, swing?, steps?, inspiredBy?, brief?, layers?, key?, parts: {role:
-/// {instrument?, notes}}}`. A note is `[step, note, dur?, vel?]` or `{step, note?, dur?,
-/// vel?}` (steps count sixteenths from 0; `dur` in sixteenths; drum parts may leave `note`
-/// out). Returns the envelope.
+/// {instrument?, notes}}}`. A note is `[step, note, dur?, vel?, syl?]` or `{step, note?, dur?,
+/// vel?, syl?}` (steps count sixteenths from 0; `dur` in sixteenths; drum parts may leave `note`
+/// out; `syl` is the syllable a `voice-<preset>` instrument sings on it). Returns the envelope.
 pub fn envelope(params: &JsonValue) -> Result<JsonValue, PianoRollError> {
     let parts = match params.get("parts").and_then(JsonValue::as_object) {
         Some(p) if !p.is_empty() => p,
@@ -348,18 +351,28 @@ fn notes_of(
     };
     let mut out = Vec::new();
     for (k, raw) in list.iter().enumerate() {
-        let (step, note, dur, vel);
+        let (step, note, dur, vel, syl_text);
         if let Some(a) = raw.as_array() {
             step = int(a.first());
             note = if a.len() > 1 { int(a.get(1)) } else { None };
             dur = if a.len() > 2 { int(a.get(2)) } else { None };
             vel = if a.len() > 3 { int(a.get(3)) } else { None };
+            syl_text = a.get(4).and_then(JsonValue::as_str);
         } else {
             step = int(raw.get("step"));
             note = int(raw.get("note"));
             dur = int(raw.get("dur").or_else(|| raw.get("duration")));
             vel = int(raw.get("vel").or_else(|| raw.get("velocity")));
+            syl_text = raw.get("syl").and_then(JsonValue::as_str);
         }
+        let syl = match syl_text {
+            None => None,
+            Some(t) => Some(crate::fx::formant::Syllable::parse(t).ok_or_else(|| {
+                PianoRollError::bad(&format!(
+                    "part `{id}` note {k}: `syl` {t:?} is not a syllable (`da`, `ra+ih.t`, `.s`)"
+                ))
+            })?),
+        };
         let step = match step {
             Some(s) if s >= 0 => s,
             _ => {
@@ -383,6 +396,7 @@ fn notes_of(
                 .unwrap_or(if drum_note.is_none() { 2 } else { 1 })
                 .max(1),
             velocity: vel.unwrap_or(100).clamp(1, 127),
+            syl,
         });
     }
     Ok(out)
@@ -406,15 +420,17 @@ fn ring(
         places.set(format!("p{i}"), JsonValue::Object(p));
         let mut t = JsonObject::new();
         if let Some(n) = lane.get(&i) {
-            t.set(
-                "midi",
-                JsonValue::Object(JsonObject::from_pairs([
-                    ("note", JsonValue::int(n.note)),
-                    ("channel", JsonValue::int(channel)),
-                    ("velocity", JsonValue::int(n.velocity)),
-                    ("durationSteps", JsonValue::int(n.duration)),
-                ])),
-            );
+            let mut m = JsonObject::from_pairs([
+                ("note", JsonValue::int(n.note)),
+                ("channel", JsonValue::int(channel)),
+                ("velocity", JsonValue::int(n.velocity)),
+                ("durationSteps", JsonValue::int(n.duration)),
+            ]);
+            // only when set: a roll without syllables keeps its envelope and its CID
+            if let Some(s) = n.syl {
+                m.set("vowel", JsonValue::str(s.text()));
+            }
+            t.set("midi", JsonValue::Object(m));
         }
         transitions.set(format!("t{i}"), JsonValue::Object(t));
         arcs.push(JsonValue::Object(JsonObject::from_pairs([

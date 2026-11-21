@@ -164,7 +164,7 @@ pub struct MidiBinding {
     /// [`crate::fx::formant::Syllable::code`]), 0 = none. Beyond beats: written only when set,
     /// so a document without one keeps its canonical text and CID.
     #[cfg_attr(feature = "transfer", serde(default))]
-    pub syllable: u16,
+    pub syllable: u32,
 }
 
 #[derive(Clone, Debug)]
