@@ -581,6 +581,10 @@ impl Syllable {
         let o = ((c >> 8) & 0xff) as usize;
         let g = ((c >> 16) & 0xf) as usize;
         let k = ((c >> 20) & 0x1f) as usize;
+        if v == 0xff && o > 0 && o < Onset::ALL.len() && g == 0 && k == 0 && c >> 25 == 0 {
+            // a consonant on its own (`.s`): NO_VOWEL packs as 0xff
+            return Some(Syllable::consonant(Onset::ALL[o]));
+        }
         if v == 0 || v > VOWELS.len() || o >= Onset::ALL.len() || g > VOWELS.len() || k >= Onset::ALL.len() || c >> 25 != 0 {
             return None;
         }
@@ -1282,6 +1286,12 @@ impl FormantVoice {
             for (c, f) in self.cur.iter_mut().zip(l) {
                 *c = libm::log2(f * shift);
             }
+            // a nasal, liquid or glide on its own (no vowel to go to) holds its own formants
+            if !self.nucleus && self.onset.sonorant() {
+                for (t, f) in self.tgt.iter_mut().zip(l) {
+                    *t = libm::log2(f * shift);
+                }
+            }
             if !self.sounding {
                 for k in 3..N_FORMANTS {
                     self.cur[k] = self.tgt[k];
@@ -1382,7 +1392,8 @@ impl FormantVoice {
         let os = self.onset.shape();
         let ramp = 5.0;
         self.voicing = if !self.nucleus {
-            os.voice_bar
+            // a sonorant alone is voiced all through (a hum, an `l`): it is nothing but its voice
+            if self.onset.sonorant() { 1.0 } else { os.voice_bar }
         } else if t_ms < os.gap_ms {
             os.voice_bar
         } else {
@@ -1393,6 +1404,10 @@ impl FormantVoice {
         } else {
             0.0
         };
+        if !self.nucleus && matches!(self.onset, Onset::M | Onset::N | Onset::Ng) {
+            // a nasal alone is its murmur, the whole time
+            murmur = 1.0;
+        }
         let mut aspiration = p.breath * 0.15;
         if os.aspirate > 0.0 && t_ms < os.gap_ms + ramp {
             aspiration += os.aspirate * (1.0 - self.voicing);
@@ -2037,7 +2052,7 @@ mod tests {
         // syllable with neither packs as it always did
         assert_eq!(Syllable::from_code(r.code()), Some(r));
         assert_eq!(Syllable::new(Onset::R, 0).code(), ((Onset::R as u32) << 8) | 1);
-        for s in ["fa", "ah+ih", "sha+oo.ng", "ka.z", "ih.n", "er.d", "ma.m", "ra+ih.t"] {
+        for s in ["fa", "ah+ih", "sha+oo.ng", "ka.z", "ih.n", "er.d", "ma.m", "ra+ih.t", ".s", ".t", ".m", ".l"] {
             let syl = Syllable::parse(s).unwrap();
             assert_eq!(Syllable::from_code(syl.code()).map(|x| x.text()), Some(s.to_string()), "{s}");
         }
@@ -2046,6 +2061,58 @@ mod tests {
         assert!(Syllable::consonant(Onset::T).text() == ".t");
         // every old code means what it did
         assert_eq!(Syllable::new(Onset::H, 6).code(), (14 << 8) | 7);
+    }
+
+    /// Every consonant on its own (a cluster member, an escaped `/s/`) sounds, and sounds as its class
+    /// does: a stop is a short burst (its energy early), a fricative or `h` noise (bright, many zero
+    /// crossings), a nasal a dark hum (its energy low), a liquid or glide voiced (the fundamental's
+    /// harmonics), an affricate a burst then noise. The BeatScript phoneme set (docs/btw/phonemes.md in
+    /// djrust-vevr-se) says no symbol renders silent.
+    #[test]
+    fn every_consonant_alone_sounds_as_its_class() {
+        let p = preset("robot").unwrap().params;
+        let n = 6000;
+        let zcr = |x: &[f32]| {
+            let loud: Vec<f32> = x.iter().copied().filter(|v| v.abs() > 1e-4).collect();
+            loud.windows(2).filter(|w| (w[0] >= 0.0) != (w[1] >= 0.0)).count() as f64 / loud.len().max(2) as f64
+        };
+        let energy = |x: &[f32]| x.iter().map(|v| (*v as f64).powi(2)).sum::<f64>();
+        let harmonics = |x: &[f32]| (1..8).map(|h| tone(x, 110.0 * h as f64).powi(2)).sum::<f64>();
+        for o in Onset::ALL.iter().copied().filter(|o| *o != Onset::None) {
+            let x = render(&p, 110.0, Some(Syllable::consonant(o)), n);
+            let e = energy(&x);
+            let peak = x.iter().fold(0f32, |m, v| m.max(v.abs()));
+            assert!(peak > 0.01 && e > 1e-3, "{o:?} alone is silent: peak {peak} energy {e}");
+            match o {
+                Onset::B | Onset::D | Onset::G | Onset::P | Onset::T | Onset::K => {
+                    // a burst: most of what it does is in its first 60 ms
+                    let early = energy(&x[..(0.06 * SR) as usize]);
+                    assert!(early > 0.5 * e, "{o:?}: a stop's energy comes early ({early} of {e})");
+                }
+                Onset::F | Onset::S | Onset::Sh | Onset::Th => {
+                    assert!(zcr(&x) > 0.3 && harmonics(&x) < 1e-4, "{o:?}: a voiceless fricative is bright noise (zero crossings {})", zcr(&x));
+                }
+                Onset::V | Onset::Z | Onset::Zh | Onset::Dh => {
+                    // shaped noise over a voice bar
+                    assert!(zcr(&x) > 0.1 && harmonics(&x) > 1e-4, "{o:?}: a voiced fricative is noise and a buzz (zero crossings {})", zcr(&x));
+                }
+                Onset::H => {
+                    // breath through the tract: noise, no voice
+                    assert!(harmonics(&x) < 1e-4, "h is aspiration, not a voice");
+                }
+                Onset::M | Onset::N | Onset::Ng => {
+                    assert!(brightness(&x) < 0.2, "{o:?}: a nasal is dark ({})", brightness(&x));
+                    assert!(harmonics(&x) > 1e-4, "{o:?}: a nasal hums");
+                }
+                Onset::L | Onset::R | Onset::W | Onset::Y => {
+                    assert!(harmonics(&x) > 1e-4, "{o:?}: a liquid or glide is voiced");
+                }
+                Onset::Ch | Onset::Jh => {
+                    assert!(zcr(&x) > 0.1, "{o:?}: an affricate ends in noise");
+                }
+                Onset::None => {}
+            }
+        }
     }
 
     #[test]
