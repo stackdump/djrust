@@ -519,6 +519,13 @@ impl Dj {
         self.engine.apply_live_op(method, &p).map_err(|e| JsError::new(&e))
     }
 
+    /// What the listener hears: the crossfader, the master and each deck's level, mute, EQ kills,
+    /// filters and vocoder ([`crate::host::deck::audible`]), as JSON. The page reports it with its
+    /// state, so a remote reader can tell a silent deck from a quiet one.
+    pub fn mixer(&self) -> String {
+        crate::host::deck::audible::audible_text(&self.engine)
+    }
+
     /// Every vocoder instance in use (djhost `vocoders_json`).
     pub fn vocoders(&self) -> String {
         self.engine.vocoders_json().canonical_js()

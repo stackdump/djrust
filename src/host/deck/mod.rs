@@ -42,6 +42,7 @@
 //! drives it by hand through [`Renderer::render_block`].
 
 pub mod arrange_start;
+pub mod audible;
 pub mod audition;
 pub mod aux;
 pub mod engage;
