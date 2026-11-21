@@ -54,7 +54,7 @@ pub use automation::{FxAutomation, FxAutomationEvent};
 pub use aux_bus::{AuxBus, AuxFxKey, AuxSettings};
 pub use aux_macro::AuxMacro;
 pub use insert::{InsertChain, InsertKind, InsertParam, InsertSettings};
-pub use limiter::PeakLimiter;
+pub use limiter::{GainTap, PeakLimiter};
 pub use loop_fx::{LoopFxLimiter, LoopFxParams, LoopFxVoice};
 pub use loop_master::{LoopMasterBus, LoopMasterCommand};
 pub use master_chain::{MasterChain, MasterParamId, MasterParamOp, MasterParams, Stage};

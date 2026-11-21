@@ -205,3 +205,44 @@ fn songs_on_the_app_path_read_under_the_ceiling() {
         );
     }
 }
+
+/// Stems through the limiter (`GainTap`): the mix's gains, replayed on each part alone, give parts that add up to the
+/// limited mix.
+#[test]
+fn replayed_gains_make_parts_that_add_up_to_the_limited_mix() {
+    use djrust::fx::GainTap;
+    let sr = 44_100.0;
+    let n = 44_100;
+    // two loud parts (together well over the ceiling): a low sine and a burst of a high one
+    let a: Vec<f32> = (0..n).map(|i| 0.7 * (i as f32 * 2.0 * std::f32::consts::PI * 55.0 / 44_100.0).sin()).collect();
+    let b: Vec<f32> = (0..n).map(|i| if (i / 4410) % 2 == 0 { 0.6 * (i as f32 * 2.0 * std::f32::consts::PI * 880.0 / 44_100.0).sin() } else { 0.0 }).collect();
+    let run = |x: &[f32], lim: &mut PeakLimiter| {
+        let (mut l, mut r) = (x.to_vec(), x.to_vec());
+        for k in (0..n).step_by(128) {
+            let e = (k + 128).min(n);
+            lim.process(&mut l[k..e], Some(&mut r[k..e]), e - k);
+        }
+        l
+    };
+    let mix: Vec<f32> = a.iter().zip(&b).map(|(x, y)| x + y).collect();
+    let mut m = PeakLimiter::new(sr);
+    m.tap = GainTap::Record;
+    let limited = run(&mix, &mut m);
+    let gains = m.tap_gains.clone();
+    assert_eq!(gains.len(), n);
+    assert!(gains.iter().any(|g| *g < 0.9), "the mix is limited");
+    let mut parts = vec![0f32; n];
+    for x in [&a, &b] {
+        let mut p = PeakLimiter::new(sr);
+        p.tap = GainTap::Replay;
+        p.tap_gains = gains.clone();
+        for (s, y) in parts.iter_mut().zip(run(x, &mut p)) {
+            *s += y;
+        }
+    }
+    let worst = parts.iter().zip(&limited).map(|(p, l)| (p - l).abs()).fold(0f32, f32::max);
+    assert!(worst < 1e-5, "parts add up to the mix: worst {worst}");
+    // off, the limiter is as it was: the same bytes as a limiter with no tap
+    let mut plain = PeakLimiter::new(sr);
+    assert_eq!(run(&mix, &mut plain), limited);
+}

@@ -14,15 +14,34 @@
 //! is the input, `lookahead` samples late.
 //!
 //! Real-time safe: every buffer is allocated in [`PeakLimiter::new`]; `process` allocates,
-//! locks and frees nothing.
+//! locks and frees nothing (unless a [`GainTap`] is on: an offline render's stems).
 
+use alloc::collections::VecDeque;
 use alloc::vec;
 use alloc::vec::Vec;
 use libm::{exp, floor, log10, pow};
 
 use super::true_peak::{flat_coefficients, interpolated_peak, DELAY, TAPS};
 
+/// The limiter's gain for stems: what a part sounds like in the mix when the mix is what the
+/// limiter heard. `Record` limits as always and keeps the gain it applied, a sample at a time, in
+/// [`PeakLimiter::tap_gains`]; `Replay` applies those gains, in the same order, instead of its
+/// own (and no ceiling clamp). A render of one part replaying the full mix's gains is that part
+/// as it sat in the mix, and the parts' renders add up to the mix's (to float rounding, and but
+/// for the samples the ceiling clamp cut). The host drains or feeds the queue between blocks;
+/// an empty queue in `Replay` is a gain of 1. Off by default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GainTap {
+    #[default]
+    Off,
+    Record,
+    Replay,
+}
+
 pub struct PeakLimiter {
+    /// For stems ([`GainTap`]); `tap_gains` is its queue.
+    pub tap: GainTap,
+    pub tap_gains: VecDeque<f32>,
     pub sample_rate: f64,
     /// Samples of delay: the moving average's length plus the FIR's reach on both sides.
     pub lookahead: usize,
@@ -86,6 +105,8 @@ impl PeakLimiter {
         let span = window + 2 * DELAY;
         let queue_cap = span + 2;
         PeakLimiter {
+            tap: GainTap::Off,
+            tap_gains: VecDeque::new(),
             sample_rate,
             lookahead,
             window,
@@ -210,7 +231,14 @@ impl PeakLimiter {
             if g < deepest {
                 deepest = g;
             }
-            let gf = g as f32;
+            let gf = match self.tap {
+                GainTap::Off => g as f32,
+                GainTap::Record => {
+                    self.tap_gains.push_back(g as f32);
+                    g as f32
+                }
+                GainTap::Replay => self.tap_gains.pop_front().unwrap_or(1.0),
+            };
             let ol = self.delay_l[self.delay_pos];
             let or = self.delay_r[self.delay_pos];
             self.delay_l[self.delay_pos] = xl;
@@ -220,8 +248,11 @@ impl PeakLimiter {
             } else {
                 self.delay_pos + 1
             };
-            let yl = (ol * gf).max(-c).min(c);
-            let yr = (or * gf).max(-c).min(c);
+            let (yl, yr) = if self.tap == GainTap::Replay {
+                (ol * gf, or * gf)
+            } else {
+                ((ol * gf).max(-c).min(c), (or * gf).max(-c).min(c))
+            };
             left[i] = yl;
             if let Some(r) = right.as_deref_mut() {
                 r[i] = yr;
