@@ -78,6 +78,9 @@ struct Note {
     /// `syl`: the syllable a formant voice (`voice-<preset>`) sings on the note
     /// ([`crate::fx::formant::Syllable`] text: `da`, `ra+ih.t`), written as the binding's `vowel`.
     syl: Option<crate::fx::formant::Syllable>,
+    /// How it is played beyond pitch, length and velocity (glide, decay, pitch drop, ratchet,
+    /// flam): written as the binding's keys, only those that are set.
+    expr: crate::pflow::NoteExpr,
 }
 
 struct Segment {
@@ -103,7 +106,10 @@ fn int(v: Option<&JsonValue>) -> Option<i64> {
 /// `{name?, tempo?, swing?, steps?, inspiredBy?, brief?, layers?, key?, parts: {role:
 /// {instrument?, notes}}}`. A note is `[step, note, dur?, vel?, syl?]` or `{step, note?, dur?,
 /// vel?, syl?}` (steps count sixteenths from 0; `dur` in sixteenths; drum parts may leave `note`
-/// out; `syl` is the syllable a `voice-<preset>` instrument sings on it). Returns the envelope.
+/// out; `syl` is the syllable a `voice-<preset>` instrument sings on it). In the array form the
+/// fifth item may instead be an object `{syl?, glide?, decay?, pitchDrop?, ratchet?, flam?}`: how
+/// the note is played ([`crate::pflow::NoteExpr`]); the object form takes those keys too.
+/// Returns the envelope.
 pub fn envelope(params: &JsonValue) -> Result<JsonValue, PianoRollError> {
     let parts = match params.get("parts").and_then(JsonValue::as_object) {
         Some(p) if !p.is_empty() => p,
@@ -351,19 +357,27 @@ fn notes_of(
     };
     let mut out = Vec::new();
     for (k, raw) in list.iter().enumerate() {
-        let (step, note, dur, vel, syl_text);
+        let (step, note, dur, vel, syl_text, expr);
         if let Some(a) = raw.as_array() {
             step = int(a.first());
             note = if a.len() > 1 { int(a.get(1)) } else { None };
             dur = if a.len() > 2 { int(a.get(2)) } else { None };
             vel = if a.len() > 3 { int(a.get(3)) } else { None };
-            syl_text = a.get(4).and_then(JsonValue::as_str);
+            // the fifth item: a syllable, or an object of the syllable and how the note is played
+            let fifth = a.get(4);
+            let obj = fifth.filter(|v| v.as_object().is_some());
+            syl_text = match obj {
+                Some(o) => o.get("syl").and_then(JsonValue::as_str),
+                None => fifth.and_then(JsonValue::as_str),
+            };
+            expr = obj.map_or_else(crate::pflow::NoteExpr::default, crate::pflow::NoteExpr::from_json);
         } else {
             step = int(raw.get("step"));
             note = int(raw.get("note"));
             dur = int(raw.get("dur").or_else(|| raw.get("duration")));
             vel = int(raw.get("vel").or_else(|| raw.get("velocity")));
             syl_text = raw.get("syl").and_then(JsonValue::as_str);
+            expr = crate::pflow::NoteExpr::from_json(raw);
         }
         let syl = match syl_text {
             None => None,
@@ -397,6 +411,7 @@ fn notes_of(
                 .max(1),
             velocity: vel.unwrap_or(100).clamp(1, 127),
             syl,
+            expr,
         });
     }
     Ok(out)
@@ -430,6 +445,7 @@ fn ring(
             if let Some(s) = n.syl {
                 m.set("vowel", JsonValue::str(s.text()));
             }
+            n.expr.write(&mut m);
             t.set("midi", JsonValue::Object(m));
         }
         transitions.set(format!("t{i}"), JsonValue::Object(t));

@@ -99,6 +99,11 @@ pub struct CompiledNet {
     /// ([`crate::fx::formant::Syllable::code`]; 0: none).
     #[cfg_attr(feature = "transfer", serde(default))]
     pub syllable: Vec<u32>,
+    /// How each MIDI-bound transition's note is played beyond pitch, length and velocity
+    /// (glide, decay, pitch drop, ratchet, flam). Empty when no binding of the net has any, so
+    /// a plain net is the net it always was.
+    #[cfg_attr(feature = "transfer", serde(default))]
+    pub expr: Vec<crate::pflow::NoteExpr>,
     /// MIDI channel of every MIDI-bound transition: the binding's, else the track's (what
     /// picks its voice). 0 for transitions without a binding.
     pub channel: Vec<u8>,
@@ -232,6 +237,7 @@ impl CompiledNet {
         let mut dur_ms = vec![0.0; n_trans];
         let mut dur_steps = vec![0.0; n_trans];
         let mut syllable = vec![0u32; n_trans];
+        let mut expr: Vec<crate::pflow::NoteExpr> = Vec::new();
         let mut channel = vec![0u8; n_trans];
         let mut action = vec![ControlAction::None; n_trans];
         let mut action_note = vec![0i64; n_trans];
@@ -244,6 +250,12 @@ impl CompiledNet {
                 dur_ms[i] = b.duration as f64;
                 dur_steps[i] = b.duration_steps as f64;
                 syllable[i] = b.syllable;
+                if !b.expr.is_plain() {
+                    if expr.is_empty() {
+                        expr = vec![crate::pflow::NoteExpr::default(); n_trans];
+                    }
+                    expr[i] = b.expr;
+                }
                 let ch = if b.channel != 0 {
                     b.channel
                 } else {
@@ -331,6 +343,7 @@ impl CompiledNet {
             dur_ms,
             dur_steps,
             syllable,
+            expr,
             channel,
             action,
             action_note,

@@ -71,7 +71,7 @@ use crate::musicality::space::{FdnReverb, Shimmer, SpaceSpec};
 use crate::musicality::synth_voice::{
     Brush, FilterEnvelope, HfTilt, KickTuning, SubOctave, Unison, VoiceDesign,
 };
-use crate::pflow::{OrderedMap, Project};
+use crate::pflow::{NoteExpr, OrderedMap, Project, FLAM_GRACE, FLAM_MS, PITCH_DROP_MS};
 use crate::sound::synth_name;
 use crate::voices::drumkits::{gm_note, hold_ms};
 use crate::voices::sampler::velocity_scale;
@@ -592,6 +592,16 @@ pub struct Lane {
     pm_on: bool,
     pm: Vec<f64>,
     pm_mul: f64,
+    /// A note's own bend (a `glide` from the note before, a `pitchDrop`): each voice's current
+    /// multiplier and its per-sample step towards 1. Empty unless a net on the lane bends a note,
+    /// so a lane without one renders as it always did.
+    #[cfg_attr(feature = "transfer", serde(default))]
+    npm: Vec<f64>,
+    #[cfg_attr(feature = "transfer", serde(default))]
+    npm_mul: Vec<f64>,
+    /// The voice the lane's last note struck: where a `glide` goes on from.
+    #[cfg_attr(feature = "transfer", serde(default))]
+    last_voice: Option<usize>,
     // band-limited tables for a swept saw / square (shared with every lane of the wave)
     // (shared tables, not sent with a transferred project: [`WaveProject::installed`] takes
     // this engine's own, which hold the same values)
@@ -804,6 +814,9 @@ impl Lane {
             pm_on: false,
             pm: Vec::new(),
             pm_mul: 1.0,
+            npm: Vec::new(),
+            npm_mul: Vec::new(),
+            last_voice: None,
             mip: Arc::default(),
             mip_top: Arc::default(),
             mip_base: Vec::new(),
@@ -2208,6 +2221,14 @@ fn build_lanes(
                 lanes.push(lane);
             }
             g.nets[ni].lane[t] = kind_lane[&key] as i64;
+            // a note that bends (glide, pitch drop) gives its tonal lane the per-voice bend
+            if g.nets[ni].expr.get(t).is_some_and(NoteExpr::bends) {
+                let lane = &mut lanes[kind_lane[&key]];
+                if lane.is_tonal && lane.npm.len() != lane.poly {
+                    lane.npm = vec![1.0; lane.poly];
+                    lane.npm_mul = vec![1.0; lane.poly];
+                }
+            }
         }
         if !kind_order.is_empty() {
             by_net.insert(id, kind_order.iter().map(|k| kind_lane[k]).collect());
@@ -2582,6 +2603,15 @@ fn strike(lane: &mut Lane, sr: f64, v: usize, note: i64, sweep_x: f64) {
 /// Start a note on a tonal lane: steal the quietest voice (deterministic), continuing from
 /// its current level, and decay over the note's length (`trigger`).
 fn trigger(lane: &mut Lane, sr: f64, note: i64, w: f64, dur_ms: f64, sweep_x: f64) {
+    trigger_expr(lane, sr, note, w, dur_ms, sweep_x, NoteExpr::default());
+}
+
+/// [`trigger`], with how the note is played (`NoteExpr`): a `glide` goes on in the voice that
+/// sounded the lane's last note and bends it from that pitch to this one; a `pitchDrop` starts
+/// the note high and falls onto it; a `decay` is the note's tail whatever its length. A plain
+/// note is exactly `trigger`.
+#[allow(clippy::too_many_arguments)]
+fn trigger_expr(lane: &mut Lane, sr: f64, note: i64, w: f64, dur_ms: f64, sweep_x: f64, e: NoteExpr) {
     lane.active = true;
     let mut v = 0;
     let mut best = f64::INFINITY;
@@ -2592,8 +2622,44 @@ fn trigger(lane: &mut Lane, sr: f64, note: i64, w: f64, dur_ms: f64, sweep_x: f6
             v = k;
         }
     }
+    // a glide stays in the voice still sounding the note before (legato), from its pitch
+    let mut from_inc = 0.0;
+    if e.glide_ms > 0 && !lane.npm.is_empty() {
+        if let Some(lv) = lane.last_voice.filter(|&lv| lv < lane.poly) {
+            if libm::fabs(lane.sd[lv] + lane.sa[lv]) >= SILENT {
+                v = lv;
+                from_inc = lane.inc[lv] * lane.npm[lv];
+            }
+        }
+    }
     let cur = lane.sd[v] + lane.sa[v];
     strike(lane, sr, v, note, sweep_x);
+    lane.last_voice = Some(v);
+    if !lane.npm.is_empty() {
+        let (ratio, ms) = if from_inc > 0.0 && lane.inc[v] > 0.0 {
+            (from_inc / lane.inc[v], f64::from(e.glide_ms))
+        } else if e.pitch_drop > 0 {
+            (libm::pow(2.0, f64::from(e.pitch_drop) / 12.0), PITCH_DROP_MS)
+        } else {
+            (1.0, 0.0)
+        };
+        if ratio != 1.0 && ms > 0.0 {
+            lane.npm[v] = ratio;
+            lane.npm_mul[v] = libm::pow(1.0 / ratio, 1.0 / (ms / 1000.0 * sr));
+            if lane.mip_on && ratio > 1.0 {
+                // starting high: the table that fits the note's highest pitch
+                let hz = lane.inc[v] * sr * ratio * if lane.pm_on { lane.pitch_from } else { 1.0 };
+                let mut k = 0;
+                while k + 1 < lane.mip_top.len() && lane.mip_top[k] < hz * 1.06 {
+                    k += 1;
+                }
+                lane.mip_base[v] = k * (WAVE_TABLE_SIZE + 1);
+            }
+        } else {
+            lane.npm[v] = 1.0;
+            lane.npm_mul[v] = 1.0;
+        }
+    }
     if lane.f_amount > 0.0 {
         lane.f_vel[v] = w * w;
     }
@@ -2612,6 +2678,10 @@ fn trigger(lane: &mut Lane, sr: f64, note: i64, w: f64, dur_ms: f64, sweep_x: f6
     } else {
         tau
     };
+    if e.decay_ms > 0 {
+        // an 808's ring: the tail the note asks for, not its length's
+        tau = (f64::from(e.decay_ms) / 1000.0 * lane.decay_move.max(0.0)).clamp(0.03, 10.0);
+    }
     lane.md[v] = libm::exp(-lane.st[INV_SR] / tau);
     lane.sd[v] = w;
     lane.sa[v] = cur - w;
@@ -2766,11 +2836,16 @@ fn hit(
         return None;
     }
     let steps = n.dur_steps[t];
-    let dur_ms = if steps > 0.0 {
+    let mut dur_ms = if steps > 0.0 {
         steps * 60000.0 / (tempo * PPQ)
     } else {
         n.dur_ms[t]
     };
+    let e = n.expr.get(t).copied().unwrap_or_default();
+    if e.ratchet >= 2 {
+        // each strike of a ratchet is as long as its share of the step
+        dur_ms = (dur_ms / f64::from(e.ratchet)).min(60000.0 / (tempo * PPQ) / f64::from(e.ratchet));
+    }
     if lane.sample_slot >= 0 {
         // the note sounds on the host's sampler; this lane only reports it
         lane.active = false;
@@ -2786,7 +2861,7 @@ fn hit(
     if let Some(f) = lane.formant.as_mut() {
         f.pending = n.syllable.get(t).copied().unwrap_or(0);
     }
-    trigger(lane, sr, note, w, dur_ms, sweep_x);
+    trigger_expr(lane, sr, note, w, dur_ms, sweep_x, e);
     None
 }
 
@@ -3094,6 +3169,15 @@ fn lane_sample(lanes: &mut [Lane], li: usize, sr: f64, mix: &mut Mix) {
             continue;
         }
         let mut rate = lane.inc[k] * fmk * vib;
+        if !lane.npm.is_empty() {
+            let p = lane.npm[k];
+            if p != 1.0 {
+                rate *= p;
+                // towards 1, exponentially; on 1 once it would pass it
+                let next = p * lane.npm_mul[k];
+                lane.npm[k] = if (p > 1.0) == (next > 1.0) && next != 1.0 { next } else { 1.0 };
+            }
+        }
         if lane.pm_on {
             let p = lane.pm[k];
             rate *= p;
@@ -4607,6 +4691,7 @@ impl WaveRunner {
             let (hits_out, record_hits) = (&mut self.hits, self.record_hits);
             let frame_now = self.block_start + self.block_offset;
             let clock_samples = self.clock[SAMPLES];
+            let spt = self.clock[SPT];
             graph.advance_with(|n, t| {
                 let li = n.lane[t];
                 if li >= 0 {
@@ -4615,7 +4700,52 @@ impl WaveRunner {
                         return;
                     }
                     let note = played_note(harmony.as_ref(), &lanes[li], n, t, ctx.step);
-                    if groove {
+                    let e = n.expr.get(t).copied().unwrap_or_default();
+                    if e.ratchet >= 2 || e.flam {
+                        // A ratchet or a flam: its strikes, each an offset (samples from the step,
+                        // the groove's delay in it) and a velocity. The first may sound now; the
+                        // rest wait with the groove's held notes.
+                        let (base, vel) = if groove {
+                            let (delay_ms, vel) = ctx.timing(lanes[li].is_tonal, n, t, note);
+                            (delay_ms / 1000.0 * sr, vel)
+                        } else {
+                            (0.0, n.vel[t])
+                        };
+                        let mut plan = [(0.0f64, 0i64); 1 + crate::pflow::MAX_RATCHET as usize];
+                        let mut count = 0;
+                        let mut main = base;
+                        if e.flam {
+                            plan[count] = (base, (libm::round(vel as f64 * FLAM_GRACE) as i64).max(1));
+                            count += 1;
+                            main = base + FLAM_MS / 1000.0 * sr;
+                        }
+                        let r = usize::from(e.ratchet.max(1));
+                        for k in 0..r {
+                            plan[count] = (main + k as f64 * spt / r as f64, vel);
+                            count += 1;
+                        }
+                        for &(off, v) in &plan[..count] {
+                            if off < 1.0 {
+                                let lg = record_hits.then(|| LogTo {
+                                    out: &mut *hits_out,
+                                    frame: frame_now,
+                                    grid_frame: -1,
+                                    tick: tick_after as i64,
+                                });
+                                if let Some(sn) = hit(lanes, duck_hold, li, sr, tempo, n, t, note, Some(v), sweep_x, lg, frame_now, clock_samples, keys) {
+                                    if samples.len() < samples.capacity() {
+                                        samples.push(sn);
+                                    }
+                                }
+                            } else if held.len() < GROOVE_CAPACITY {
+                                let due = clock_samples + off;
+                                held.push(Held { due, net: n.index, trans: t, lane: li, vel: v, tick: tick_after as i64, grid: frame_now, note });
+                                if due < *groove_next {
+                                    *groove_next = due;
+                                }
+                            }
+                        }
+                    } else if groove {
                         let (delay_ms, vel) = ctx.timing(lanes[li].is_tonal, n, t, note);
                         let delay = delay_ms / 1000.0 * sr;
                         if delay >= 1.0 && held.len() < GROOVE_CAPACITY {

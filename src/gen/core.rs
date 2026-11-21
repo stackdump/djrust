@@ -191,6 +191,7 @@ impl NetBundle {
                 duration,
                 duration_steps: 0,
                 syllable: 0,
+                expr: Default::default(),
             },
         );
     }

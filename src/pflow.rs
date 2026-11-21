@@ -165,6 +165,85 @@ pub struct MidiBinding {
     /// so a document without one keeps its canonical text and CID.
     #[cfg_attr(feature = "transfer", serde(default))]
     pub syllable: u32,
+    /// How the note is played beyond its pitch, length and velocity (`glide`, `decay`,
+    /// `pitchDrop`, `ratchet`, `flam`): BeatScript's expression marks. Beyond beats: written only
+    /// when set, so a document without them keeps its canonical text and CID.
+    #[cfg_attr(feature = "transfer", serde(default))]
+    pub expr: NoteExpr,
+}
+
+/// How one note is played beyond its pitch, length and velocity. Every field's zero is "as
+/// beats plays it", and the whole is written to a document only where it is not zero.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "transfer", derive(serde::Serialize, serde::Deserialize))]
+pub struct NoteExpr {
+    /// `"glide": ms`: the note does not strike again; the voice still sounding the note before
+    /// it bends to this pitch over `ms` (a 303 / 808 slide). Tonal voices only.
+    pub glide_ms: u16,
+    /// `"decay": ms`: the note's tail, whatever its length says (an 808's ring). Tonal only.
+    pub decay_ms: u16,
+    /// `"pitchDrop": n`: the note starts `n` semitones high and falls onto its pitch in
+    /// [`PITCH_DROP_MS`] (an 808's punch). Tonal only.
+    pub pitch_drop: u8,
+    /// `"ratchet": n` (2..8): the note sounds `n` times, evenly, inside its sixteenth step.
+    pub ratchet: u8,
+    /// `"flam": true`: a soft grace hit on the step, the note itself [`FLAM_MS`] after it.
+    pub flam: bool,
+}
+
+/// How long a `pitchDrop` takes to fall onto the note, in ms.
+pub const PITCH_DROP_MS: f64 = 50.0;
+/// How far behind its grace hit a flammed note sounds, in ms.
+pub const FLAM_MS: f64 = 22.0;
+/// A flam's grace hit, as a fraction of the note's velocity.
+pub const FLAM_GRACE: f64 = 0.45;
+/// The most a `ratchet` divides a step into.
+pub const MAX_RATCHET: u8 = 8;
+
+impl NoteExpr {
+    pub fn is_plain(&self) -> bool {
+        *self == NoteExpr::default()
+    }
+
+    /// Does it move a tonal voice's pitch (glide, pitch drop)?
+    pub fn bends(&self) -> bool {
+        self.glide_ms > 0 || self.pitch_drop > 0
+    }
+
+    /// Read from a binding's (or a roll note's) JSON: `glide`, `decay`, `pitchDrop`, `ratchet`,
+    /// `flam`. Out-of-range values are clamped; a ratchet of 0 or 1 is none.
+    pub fn from_json(m: &JsonValue) -> NoteExpr {
+        let num = |k: &str, hi: f64| -> f64 {
+            m.get(k).and_then(JsonValue::as_f64).filter(|v| v.is_finite()).map_or(0.0, |v| libm::round(v).clamp(0.0, hi))
+        };
+        let ratchet = num("ratchet", f64::from(MAX_RATCHET)) as u8;
+        NoteExpr {
+            glide_ms: num("glide", 10000.0) as u16,
+            decay_ms: num("decay", 10000.0) as u16,
+            pitch_drop: num("pitchDrop", 48.0) as u8,
+            ratchet: if ratchet >= 2 { ratchet } else { 0 },
+            flam: m.get("flam").is_some_and(JsonValue::is_truthy),
+        }
+    }
+
+    /// Its keys on a binding's JSON, only the ones that are set.
+    pub fn write(&self, midi: &mut JsonObject) {
+        if self.glide_ms > 0 {
+            midi.set("glide", JsonValue::int(i64::from(self.glide_ms)));
+        }
+        if self.decay_ms > 0 {
+            midi.set("decay", JsonValue::int(i64::from(self.decay_ms)));
+        }
+        if self.pitch_drop > 0 {
+            midi.set("pitchDrop", JsonValue::int(i64::from(self.pitch_drop)));
+        }
+        if self.ratchet >= 2 {
+            midi.set("ratchet", JsonValue::int(i64::from(self.ratchet)));
+        }
+        if self.flam {
+            midi.set("flam", JsonValue::Bool(true));
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -564,6 +643,7 @@ impl NetBundle {
                 .and_then(JsonValue::as_str)
                 .and_then(crate::fx::formant::Syllable::parse)
                 .map_or(0, |s| s.code()),
+            expr: m.map_or_else(NoteExpr::default, NoteExpr::from_json),
         }
     }
 }
@@ -850,6 +930,7 @@ impl NetBundle {
                 if let Some(v) = m.vowel_text() {
                     midi.set("vowel", v.into());
                 }
+                m.expr.write(&mut midi);
                 o.set("midi", midi.into());
             }
             if let Some(c) = self.control_bindings.get(label) {
@@ -933,6 +1014,7 @@ impl NetBundle {
                 if let Some(v) = m.vowel_text() {
                     midi.set("vowel", v.into());
                 }
+                m.expr.write(&mut midi);
                 o.set("midi", midi.into());
             }
             if let Some(c) = self.control_bindings.get(id) {
