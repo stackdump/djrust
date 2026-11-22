@@ -125,7 +125,9 @@ impl VoiceSpec {
     }
 
     /// Make this a formant voice singing `params` (engine `"formant"`), with a sung note's
-    /// envelope: a soft attack and a long, held decay.
+    /// envelope: a soft attack. How a net's note is held and let go (its vowel for its length, then
+    /// a release of about 30 ms, or the part's `decay=`) is the lane's own, `NoteGate` in the
+    /// runner; `decay_scale` and `max_decay` only shape a note no net struck (a live key's release).
     pub fn sing(&mut self, params: crate::fx::formant::VoiceParams) {
         self.engine = "formant".into();
         self.formant = Some(params);

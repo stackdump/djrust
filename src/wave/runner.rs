@@ -737,6 +737,33 @@ struct FormantLane {
     vowel: f64,
     /// The struck note's syllable code (0: none), set by `hit` just before `trigger`.
     pending: u32,
+    /// Per voice: how its note is held and let go.
+    gates: Vec<NoteGate>,
+}
+
+/// The shortest a sung note holds its vowel (the nucleus), ms: the onset consonant and the first of the
+/// vowel are in it. A note shorter than this (a quick step, a long coda) still gets it.
+const NUCLEUS_MS: f64 = 90.0;
+/// How fast a sung note lets go once its vowel and coda are done, s (the time constant). Without an
+/// own `decay`, a syllable is over within about a tenth of a second, so the next one is heard on its own.
+const RELEASE_S: f64 = 0.030;
+
+/// A sung note's envelope, which is held and then let go, not a pluck's decay that rings for as long as the
+/// note is long: the vowel keeps (all but) its level for the note's length, the coda closes it, and it
+/// releases. `decay=` on the part is the length of that release, never a shortening of the vowel.
+#[derive(Clone, Copy, Debug, Default)]
+#[cfg_attr(feature = "transfer", derive(serde::Serialize, serde::Deserialize))]
+struct NoteGate {
+    /// Set for a note the net struck (a live key holds and releases itself).
+    armed: bool,
+    /// The struck syllable's coda, ms.
+    coda_ms: f64,
+    /// Samples of vowel still to hold, then of coda to hold.
+    hold_left: u32,
+    coda_left: u32,
+    /// Per-sample multipliers while held and once let go.
+    sustain: f64,
+    release: f64,
 }
 
 impl FormantLane {
@@ -752,6 +779,7 @@ impl FormantLane {
                 .collect(),
             vowel: params.vowel,
             pending: 0,
+            gates: vec![NoteGate::default(); poly],
         }
     }
 
@@ -760,6 +788,52 @@ impl FormantLane {
         self.pending = 0;
         let p = self.params;
         self.voices[v].start_at(&p, hz, syl, Some(self.vowel), sr);
+        self.gates[v] = NoteGate {
+            coda_ms: syl.map_or(0.0, |s| s.coda.duration_ms()),
+            ..NoteGate::default()
+        };
+    }
+
+    /// The note just struck on voice `v` lasts `dur_ms`: hold its vowel, close on its coda, release.
+    /// `decay_ms` (the part's `decay=`, 0: none) is the release's time constant; `decay_move` the
+    /// shape macro's multiplier on it.
+    fn arm(&mut self, v: usize, dur_ms: f64, decay_ms: f64, decay_move: f64, sr: f64) {
+        let g = &mut self.gates[v];
+        // the coda ends with the note, so the vowel is let go by its length: but never under the nucleus
+        let hold_ms = (dur_ms - g.coda_ms).max(NUCLEUS_MS);
+        g.hold_left = ((hold_ms * 0.001 * sr) as u32).max(1);
+        g.coda_left = 0;
+        // a held vowel droops a little (2 dB over the note), as a sung one does
+        let tau_hold = (hold_ms * 0.004).max(0.4);
+        g.sustain = libm::exp(-1.0 / (tau_hold * sr));
+        let tau_rel = if decay_ms > 0.0 {
+            decay_ms * 0.001 * decay_move.max(0.0)
+        } else {
+            RELEASE_S
+        };
+        g.release = libm::exp(-1.0 / (tau_rel.clamp(0.015, 10.0) * sr));
+        g.armed = true;
+    }
+
+    /// Voice `k`'s per-sample envelope multiplier: `fallback` (the lane's own) for a note no net struck.
+    fn gate_md(&mut self, k: usize, fallback: f64, sr: f64) -> f64 {
+        let g = &mut self.gates[k];
+        if !g.armed {
+            return fallback;
+        }
+        if g.hold_left > 0 {
+            g.hold_left -= 1;
+            if g.hold_left == 0 {
+                let ms = self.voices[k].begin_coda(&self.params, sr);
+                g.coda_left = (ms * 0.001 * sr) as u32;
+            }
+            return g.sustain;
+        }
+        if g.coda_left > 0 {
+            g.coda_left -= 1;
+            return g.sustain;
+        }
+        g.release
     }
 }
 
@@ -2685,6 +2759,10 @@ fn trigger_expr(lane: &mut Lane, sr: f64, note: i64, w: f64, dur_ms: f64, sweep_
     lane.md[v] = libm::exp(-lane.st[INV_SR] / tau);
     lane.sd[v] = w;
     lane.sa[v] = cur - w;
+    // a sung note is held and let go, not a decay of its own: see `NoteGate`
+    if let Some(f) = lane.formant.as_mut() {
+        f.arm(v, if dur_ms > 0.0 { dur_ms } else { 100.0 }, f64::from(e.decay_ms), lane.decay_move, sr);
+    }
 }
 
 /// `sweepProgress`: how far through a buildup the step a note was due on is (`tick` is the
@@ -3150,7 +3228,11 @@ fn lane_sample(lanes: &mut [Lane], li: usize, sr: f64, mix: &mut Mix) {
         live = true;
         let env = sd + sa;
         env_sum += env;
-        lane.sd[k] = sd * if lane.hold[k] { 1.0 } else { lane.md[k] };
+        let md = match lane.formant.as_mut() {
+            Some(f) if !lane.hold[k] => f.gate_md(k, lane.md[k], sr),
+            _ => lane.md[k],
+        };
+        lane.sd[k] = sd * if lane.hold[k] { 1.0 } else { md };
         lane.sa[k] = sa * am;
         if lane.is_pluck {
             let y = env * pluck_sample(lane, k, fmk * vib);
@@ -5592,5 +5674,79 @@ impl WaveBuild {
         }
         self.wave.installed(sample_rate, track_serial, self.layout);
         Ok(self.wave)
+    }
+}
+
+#[cfg(test)]
+mod formant_gate_tests {
+    use super::*;
+
+    const SR: f64 = 48_000.0;
+
+    fn lane(poly: usize) -> FormantLane {
+        FormantLane::new(formant::preset("robot").unwrap().params, poly, 1)
+    }
+
+    /// The envelope's per-sample multipliers for a note struck with `syllable` (a packed code) that lasts `dur_ms`.
+    fn run(syllable: u32, dur_ms: f64, decay_ms: f64, samples: usize) -> Vec<f64> {
+        let mut f = lane(1);
+        f.pending = syllable;
+        f.strike(0, 220.0, SR);
+        f.arm(0, dur_ms, decay_ms, 1.0, SR);
+        (0..samples).map(|_| f.gate_md(0, 0.5, SR)).collect()
+    }
+
+    fn level(md: &[f64], at: usize) -> f64 {
+        md[..at].iter().product()
+    }
+
+    #[test]
+    fn a_sung_note_holds_its_vowel_for_its_length_then_lets_go_quickly() {
+        let md = run(0, 500.0, 0.0, 48_000);
+        let end = (0.5 * SR) as usize;
+        // held: 2.5 dB under its start at the end of the note at most
+        assert!(level(&md, end) > 0.75, "{}", level(&md, end));
+        // let go: 30 dB under 0.12 s later (a pluck-style decay of 1.1 times the note was 8 dB under at the end and 14 dB at 0.12 s later)
+        assert!(level(&md, end + (0.12 * SR) as usize) < 0.03, "{}", level(&md, end + (0.12 * SR) as usize));
+    }
+
+    #[test]
+    fn decay_is_the_release_and_never_shortens_the_held_vowel() {
+        let plain = run(0, 500.0, 0.0, 48_000);
+        let short = run(0, 500.0, 160.0, 48_000);
+        let long = run(0, 500.0, 800.0, 48_000);
+        let end = (0.5 * SR) as usize;
+        // the note is the same up to its end, whatever the decay
+        assert_eq!(&plain[..end - 1], &short[..end - 1]);
+        assert_eq!(&plain[..end - 1], &long[..end - 1]);
+        // and the tail is the decay's
+        let later = end + (0.2 * SR) as usize;
+        assert!(level(&long, later) > 2.5 * level(&short, later), "{} against {}", level(&long, later), level(&short, later));
+        assert!(level(&short, later) > 3.0 * level(&plain, later));
+    }
+
+    #[test]
+    fn a_note_shorter_than_its_nucleus_still_gets_it_and_a_coda_ends_with_the_note() {
+        // 40 ms is under the nucleus floor: the vowel is held for NUCLEUS_MS
+        let md = run(0, 40.0, 0.0, 12_000);
+        let held = md.iter().take_while(|m| **m > 0.99).count();
+        assert!(held as f64 >= NUCLEUS_MS * 0.001 * SR - 2.0, "{held}");
+        // a syllable with a coda (`ra+ih.t`) holds its vowel until the coda's length before the note's end, then the coda
+        // keeps the level up for its own length
+        let syl = formant::Syllable::parse("ra+ih.t").unwrap().code();
+        let md = run(syl, 400.0, 0.0, 48_000);
+        let coda = formant::Onset::T.duration_ms();
+        let vowel_end = ((400.0 - coda) * 0.001 * SR) as usize;
+        let note_end = (0.4 * SR) as usize;
+        assert!(level(&md, vowel_end + 10) > 0.75 && level(&md, note_end - 10) > 0.74, "{} {}", level(&md, vowel_end + 10), level(&md, note_end - 10));
+        assert!(level(&md, note_end + (0.12 * SR) as usize) < 0.03);
+    }
+
+    #[test]
+    fn a_note_no_net_struck_keeps_the_lanes_own_envelope() {
+        // a live key (strike without arm) holds and releases itself
+        let mut f = lane(1);
+        f.strike(0, 220.0, SR);
+        assert_eq!(f.gate_md(0, 0.5, SR), 0.5);
     }
 }
