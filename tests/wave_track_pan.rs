@@ -294,3 +294,17 @@ fn the_engine_reads_the_pan_from_a_raw_nets_envelope() {
     let (l, r) = go("");
     assert!(identical(&l, &r) && energy(&l) > 1e-3, "no key, in the middle");
 }
+
+#[test]
+fn a_pair_is_as_loud_to_the_deck_gain_as_the_part_unpanned() {
+    // `.loudness` brings a deck to a level from a probe of it: the pair of copies is the part
+    // twice, one in each ear, and must not move the gain the deck plays at
+    use djrust::musicality::loudness::Loudness;
+    let probe = |p: &Project| Loudness::measure(p, None, 8_000.0).unwrap();
+    let plain = probe(&pad_only(None, None));
+    let pair = probe(&pad_pair(Some(-1.0), Some(1.0), [62, 65, 69]));
+    let same = probe(&pad_only(Some(-1.0), Some(1.0)));
+    eprintln!("plain {plain:.2} dB, pair {pair:.2} dB, equal copies {same:.2} dB");
+    assert!((pair - plain).abs() < 0.75, "a pair of different copies: {pair} against {plain}");
+    assert!((same - plain).abs() < 0.75, "a pair of equal copies: {same} against {plain}");
+}

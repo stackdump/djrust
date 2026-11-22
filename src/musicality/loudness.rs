@@ -245,16 +245,23 @@ impl Loudness {
             120.0
         };
         let frames = (Self::PROBE_BARS as f64 * 4.0 * 60.0 / tempo * probe_rate) as usize;
+        // Both channels, as BS.1770 sums them: a deck on one channel (no pan, or `.stereo` off)
+        // is the same samples twice and measures exactly what its one channel does; a part with a
+        // pan of its own (`Track::pan`) is half of what it plays on each side, and a pair of
+        // them is the part once, not half of it.
         let mut buf = vec![0.0f32; 512];
+        let mut right = vec![0.0f32; 512];
         let mut hp = KWeighting::new(probe_rate);
+        let mut hp_right = KWeighting::new(probe_rate);
         let mut sum = 0.0;
         let mut n = 0usize;
         while n < frames {
             let k = 512.min(frames - n);
-            runner.process(&mut buf[..k], None, k);
+            runner.process(&mut buf[..k], Some(&mut right[..k]), k);
             for i in 0..k {
                 let y = hp.process(buf[i] as f64 * o.master_gain);
-                sum += y * y;
+                let r = hp_right.process(right[i] as f64 * o.master_gain);
+                sum += 0.5 * (y * y + r * r);
             }
             n += k;
             if runner.stopped() {
