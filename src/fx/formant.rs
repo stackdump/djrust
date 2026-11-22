@@ -875,18 +875,22 @@ pub const PRESETS: [VoicePreset; 8] = [
     VoicePreset {
         name: "android",
         summary: "a hollow pulse voice in parallel formants, a fast shallow vibrato",
-        params: p(
-            Source::Pulse,
-            Topology::Parallel,
-            3.0,
-            30.0,
-            1.0,
-            (7.0, 8.0, 0.0),
-            2,
-            5.0,
-            0.0,
-            0.0,
-        ),
+        // the parallel branch sums to 13.5 dB under the cascade voices on the same vowel and note: made up here
+        params: VoiceParams {
+            level: 4.5,
+            ..p(
+                Source::Pulse,
+                Topology::Parallel,
+                3.0,
+                30.0,
+                1.0,
+                (7.0, 8.0, 0.0),
+                2,
+                5.0,
+                0.0,
+                0.0,
+            )
+        },
     },
     VoicePreset {
         name: "choir-aah",
@@ -955,18 +959,22 @@ pub const PRESETS: [VoicePreset; 8] = [
     VoicePreset {
         name: "talkbox",
         summary: "one saw through sharp parallel formants: a talk box on a lead",
-        params: p(
-            Source::Saw,
-            Topology::Parallel,
-            0.0,
-            40.0,
-            0.0,
-            (5.5, 10.0, 200.0),
-            1,
-            0.0,
-            0.0,
-            0.0,
-        ),
+        // 18.4 dB under the cascade voices on the same vowel and note: made up here
+        params: VoiceParams {
+            level: 8.0,
+            ..p(
+                Source::Saw,
+                Topology::Parallel,
+                0.0,
+                40.0,
+                0.0,
+                (5.5, 10.0, 200.0),
+                1,
+                0.0,
+                0.0,
+                0.0,
+            )
+        },
     },
 ];
 

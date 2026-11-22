@@ -217,3 +217,23 @@ fn the_instruments_override_voices_the_part() {
         "voice-talkbox"
     );
 }
+
+fn level_db(instrument: &str) -> f64 {
+    let p = sung_project(instrument);
+    let mut r = runner(&p);
+    let out = blocks(&mut r, (4.0 * SR) as usize / BLOCK);
+    10.0 * (out.iter().map(|x| f64::from(*x) * f64::from(*x)).sum::<f64>() / out.len() as f64).log10()
+}
+
+#[test]
+fn the_voices_play_at_about_the_same_level() {
+    // The track's loudness gain is set by a probe. At the probe's 8 kHz the resonators above 4 kHz (the soprano's F4 and
+    // F5) and the energy above it are not what the voice plays at 48 kHz: the probe heard `voice-soprano` 19 dB louder than it
+    // sounds, so its gain came out 19 dB low (and one /ee/ in a line took 13 dB off the whole line). A track with a voice is now
+    // probed at 24 kHz, and the two parallel-formant presets, which summed 13 and 18 dB under the rest, are made up.
+    let l: Vec<(&str, f64)> = formant::instrument_names().iter().map(|n| (*n, level_db(n))).collect();
+    let top = l.iter().map(|x| x.1).fold(f64::MIN, f64::max);
+    for (n, x) in &l {
+        assert!(top - x < 8.0, "{n} is {:.1} dB under the loudest voice: {l:?}", top - x);
+    }
+}
