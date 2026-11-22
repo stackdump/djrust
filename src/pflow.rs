@@ -314,6 +314,12 @@ pub struct Track {
     pub instrument_set: Vec<JsonValue>,
     pub mix: Option<JsonValue>,
     pub group: Option<String>,
+    /// Where the net sits in the stereo field, -1 (hard left) to +1 (hard right); None = the
+    /// role's own placement (`.stereo`). Set, the net's lanes play there whether or not `.stereo`
+    /// is on, at a level trimmed by `1 / (1 + |pan|)` so the loud channel keeps the level the
+    /// part has when it is not panned (a pan macro still takes over while it lasts). Read from
+    /// and written to the track's `pan` key; 0 and a missing key both mean None.
+    pub pan: Option<f64>,
     pub generator: Option<String>,
     pub ring_size: Option<f64>,
     pub beats: Option<f64>,
@@ -335,6 +341,7 @@ impl Default for Track {
             instrument_set: Vec::new(),
             mix: None,
             group: None,
+            pan: None,
             generator: None,
             ring_size: None,
             beats: None,
@@ -489,6 +496,9 @@ impl NetBundle {
             nb.track.generator = Some(g.to_string());
         }
         let num = |k: &str| t.and_then(|t| t.get(k)).and_then(JsonValue::as_f64);
+        nb.track.pan = num("pan")
+            .filter(|p| p.is_finite() && *p != 0.0)
+            .map(|p| p.clamp(-1.0, 1.0));
         nb.track.ring_size = num("ringSize");
         nb.track.beats = num("beats");
         nb.track.rotation = num("rotation");
@@ -880,6 +890,9 @@ impl NetBundle {
         }
         if let Some(g) = &t.group {
             tm.set("group", g.as_str().into());
+        }
+        if let Some(p) = t.pan.filter(|p| *p != 0.0) {
+            tm.set("pan", p.into());
         }
 
         let mut r = JsonObject::new();
