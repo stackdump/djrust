@@ -92,6 +92,11 @@ struct Segment {
 
 struct Parsed {
     id: String,
+    /// The role the part plays when it is not the part the id names (`role`): a part may be a
+    /// second part of a role, with a pan of its own (its channel and instrument are the role's,
+    /// and its chord spill is in the role's mixer group).
+    role: Option<String>,
+    pan: Option<f64>,
     channel: i64,
     instrument: String,
     segments: Vec<Segment>,
@@ -104,7 +109,10 @@ fn int(v: Option<&JsonValue>) -> Option<i64> {
 
 /// `PianoRoll.envelope`. `params`:
 /// `{name?, tempo?, swing?, steps?, inspiredBy?, brief?, layers?, key?, parts: {role:
-/// {instrument?, notes}}}`. A note is `[step, note, dur?, vel?, syl?]` or `{step, note?, dur?,
+/// {instrument?, notes}}}`. A part may also say `pan` (-1 left ... +1 right: the net plays there,
+/// `Track::pan`), and `role` when its id is not the role's (a second part of the role: it has the
+/// role's channel and instrument, and plays like the role's own part, panned the other way). A note is
+/// `[step, note, dur?, vel?, syl?]` or `{step, note?, dur?,
 /// vel?, syl?}` (steps count sixteenths from 0; `dur` in sixteenths; drum parts may leave `note`
 /// out; `syl` is the syllable a `voice-<preset>` instrument sings on it). In the array form the
 /// fifth item may instead be an object `{syl?, glide?, decay?, pitchDrop?, ratchet?, flam?}`: how
@@ -121,7 +129,17 @@ pub fn envelope(params: &JsonValue) -> Result<JsonValue, PianoRollError> {
     // A part is one segment or an array of them: {from?, every?, until?, notes}.
     let mut parsed: Vec<Parsed> = Vec::new();
     for (id, part) in parts.iter() {
-        let d = role_defaults(id);
+        // `role`: the role whose defaults (and mixer group) the part has, when it is not the id
+        let first = match part.as_array() {
+            Some(a) => a.first(),
+            None => Some(part),
+        };
+        let role = first
+            .and_then(|seg| seg.get("role"))
+            .and_then(JsonValue::as_str)
+            .filter(|r| !r.is_empty() && *r != id)
+            .map(String::from);
+        let d = role_defaults(role.as_deref().unwrap_or(id));
         let single = [part.clone()];
         let list: &[JsonValue] = match part.as_array() {
             Some(a) => a,
@@ -135,6 +153,7 @@ pub fn envelope(params: &JsonValue) -> Result<JsonValue, PianoRollError> {
         let mut segments = Vec::new();
         let mut channel = d.channel;
         let mut instrument = d.instrument.to_string();
+        let mut pan = None;
         for seg in list {
             let from = int(seg.get("from")).unwrap_or(0);
             let every = int(seg.get("every"));
@@ -155,9 +174,17 @@ pub fn envelope(params: &JsonValue) -> Result<JsonValue, PianoRollError> {
             if let Some(ch) = int(seg.get("channel")) {
                 channel = ch.clamp(1, 16);
             }
+            if let Some(p) = seg.get("pan").and_then(JsonValue::as_f64) {
+                // (0 is the role's own placement: nothing is written)
+                pan = Some(p)
+                    .filter(|p| p.is_finite() && *p != 0.0)
+                    .map(|p| p.clamp(-1.0, 1.0));
+            }
         }
         parsed.push(Parsed {
             id: id.to_string(),
+            role,
+            pan,
             channel,
             instrument,
             segments,
@@ -207,6 +234,8 @@ pub fn envelope(params: &JsonValue) -> Result<JsonValue, PianoRollError> {
     // expand the segments into one note list per part
     struct Expanded {
         id: String,
+        role: Option<String>,
+        pan: Option<f64>,
         channel: i64,
         instrument: String,
         notes: Vec<Note>,
@@ -247,6 +276,8 @@ pub fn envelope(params: &JsonValue) -> Result<JsonValue, PianoRollError> {
         }
         expanded.push(Expanded {
             id: p.id.clone(),
+            role: p.role.clone(),
+            pan: p.pan,
             channel: p.channel,
             instrument: p.instrument.clone(),
             notes,
@@ -272,6 +303,10 @@ pub fn envelope(params: &JsonValue) -> Result<JsonValue, PianoRollError> {
         if lanes.is_empty() {
             lanes.push(BTreeMap::new());
         }
+        // (a second part of a role is the role's part as far as the engine goes: no group on its
+        // own net, as the role's own part has none, so the two are voiced and mixed alike; the
+        // chord spill of either is `<id>-b` ... in the role's group)
+        let role = p.role.as_deref().unwrap_or(&p.id);
         for (i, lane) in lanes.iter().enumerate() {
             let id = if i == 0 {
                 p.id.clone()
@@ -281,11 +316,12 @@ pub fn envelope(params: &JsonValue) -> Result<JsonValue, PianoRollError> {
             let group = if i == 0 {
                 None
             } else {
-                Some((p.id.as_str(), id.as_str()))
+                let variant = id.split('-').filter(|s| !s.is_empty()).last().unwrap_or("b");
+                Some((role, variant))
             };
             nets.set(
                 id.as_str(),
-                ring(steps, lane, p.channel, &p.instrument, group),
+                ring(steps, lane, p.channel, &p.instrument, group, p.pan),
             );
         }
     }
@@ -423,6 +459,7 @@ fn ring(
     channel: i64,
     instrument: &str,
     group: Option<(&str, &str)>,
+    pan: Option<f64>,
 ) -> JsonValue {
     let mut places = JsonObject::new();
     let mut transitions = JsonObject::new();
@@ -465,19 +502,18 @@ fn ring(
     if let Some((role, _)) = group {
         track.set("group", JsonValue::str(role));
     }
+    // only when set, as the syllables and expression are: a roll without a pan keeps its envelope
+    if let Some(p) = pan {
+        track.set("pan", JsonValue::Number(p));
+    }
     let mut net = JsonObject::from_pairs([
         ("track", JsonValue::Object(track)),
         ("places", JsonValue::Object(places)),
         ("transitions", JsonValue::Object(transitions)),
         ("arcs", JsonValue::Array(arcs)),
     ]);
-    if let Some((role, id)) = group {
+    if let Some((role, variant)) = group {
         net.set("riffGroup", JsonValue::str(role));
-        let variant = id
-            .split('-')
-            .filter(|s| !s.is_empty())
-            .last()
-            .unwrap_or("b");
         net.set("riffVariant", JsonValue::str(variant));
     }
     JsonValue::Object(net)

@@ -167,6 +167,51 @@ fn notes_on_the_same_step_spill_into_sibling_nets_of_the_same_role() {
     );
 }
 
+#[test]
+fn a_part_may_have_a_pan_and_a_second_part_of_its_role() {
+    // a bass part panned left and a second one of the role panned right: the role's channel and
+    // instrument, the net's `pan`; a chord's spill on either is in the role's group, as any
+    // part's, and keeps its part's pan
+    let e = env(r#"{"steps":16,"parts":{
+          "bass":{"pan":-1,"notes":[[0,36,4],[0,43,4]]},
+          "bass_r":{"role":"bass","pan":1,"notes":[[0,43,4],[0,48,4]]}}}"#);
+    assert_eq!(net_ids(&e), ["bass", "bass-b", "bass_r", "bass_r-b"]);
+    let pan = |id: &str| net(&e, id).get("track").unwrap().get("pan").and_then(JsonValue::as_f64);
+    assert_eq!(pan("bass"), Some(-1.0));
+    assert_eq!(pan("bass-b"), Some(-1.0));
+    assert_eq!(pan("bass_r"), Some(1.0));
+    assert_eq!(pan("bass_r-b"), Some(1.0));
+    for id in ["bass", "bass-b", "bass_r", "bass_r-b"] {
+        let t = net(&e, id).get("track").unwrap();
+        assert_eq!(t.get("channel").and_then(JsonValue::as_i64), Some(6), "{id}: bass's channel");
+        assert_eq!(t.get("instrument").and_then(JsonValue::as_str), Some("sub-bass"), "{id}");
+    }
+    // the first net of either part has no group of its own, so the two are alike
+    for id in ["bass", "bass_r"] {
+        assert!(net(&e, id).get("riffGroup").is_none(), "{id}");
+        assert!(net(&e, id).get("track").unwrap().get("group").is_none(), "{id}");
+    }
+    for id in ["bass-b", "bass_r-b"] {
+        assert_eq!(net(&e, id).get("riffGroup").and_then(JsonValue::as_str), Some("bass"), "{id}");
+        assert_eq!(net(&e, id).get("track").unwrap().get("group").and_then(JsonValue::as_str), Some("bass"), "{id}");
+        assert_eq!(net(&e, id).get("riffVariant").and_then(JsonValue::as_str), Some("b"), "{id}");
+    }
+    // 0 is the role's own placement; a pan is clamped
+    let z = env(r#"{"steps":16,"parts":{"bass":{"pan":0,"notes":[[0,36,4]]},"melody":{"pan":9,"notes":[[0,60]]}}}"#);
+    assert!(net(&z, "bass").get("track").unwrap().get("pan").is_none());
+    assert_eq!(net(&z, "melody").get("track").unwrap().get("pan").and_then(JsonValue::as_f64), Some(1.0));
+}
+
+#[test]
+fn a_roll_without_a_pan_or_a_role_keeps_its_envelope_and_its_cid() {
+    // no `pan`, no `role`: no key anywhere, the bytes as they were
+    let e = env(r#"{"steps":16,"parts":{"bass":{"notes":[[0,36,4]]},"melody":{"notes":[[0,60],[0,64]]}}}"#);
+    let text = e.canonical_js();
+    assert!(!text.contains("\"pan\""), "{text}");
+    assert_eq!(net_ids(&e), ["bass", "melody", "melody-b"]);
+    assert_eq!(net(&e, "melody-b").get("riffVariant").and_then(JsonValue::as_str), Some("b"));
+}
+
 // PianoRollTests.theEnvelopeLoadsAsARawNetsShare
 #[test]
 fn the_envelope_loads_as_a_raw_nets_share() {
