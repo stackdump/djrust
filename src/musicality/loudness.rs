@@ -99,6 +99,19 @@ impl Loudness {
     /// Probe length and rate: two bars of the loudest section, at a low rate.
     pub const PROBE_BARS: i64 = 2;
     pub const PROBE_RATE: f64 = 8_000.0;
+    /// The rate a probe plays at when the track has a formant voice in it (a `voice-*` instrument): at 8 kHz the
+    /// resonators above the 4 kHz Nyquist (F4 and F5 of a bright voice are 4.2 and 4.7 kHz) and the vowels' energy
+    /// above it are not what the 48 kHz voice plays, so the probe measured the voice 13 to 19 dB louder than it
+    /// sounds (and `voice-soprano` came out 19 dB under `voice-robot`: the gain was set against the wrong level).
+    pub const FORMANT_PROBE_RATE: f64 = 24_000.0;
+
+    /// Whether any part of `project` plays a formant voice (`voice-<preset>`).
+    pub fn has_formant_voice(project: &Project) -> bool {
+        project
+            .nets
+            .values()
+            .any(|n| crate::fx::formant::instrument_preset(&n.track.instrument).is_some())
+    }
 
     /// `targetDB`: loudness the busiest section is brought to, K-weighted mean square of the
     /// summed voices after the master gain.
@@ -155,6 +168,11 @@ impl Loudness {
         genre: Option<&str>,
         section_gain: f64,
     ) -> f64 {
+        let rate = if Self::has_formant_voice(project) {
+            Self::FORMANT_PROBE_RATE
+        } else {
+            Self::PROBE_RATE
+        };
         let Some(measured) = Self::measure_fixed(
             project,
             None,
@@ -163,7 +181,7 @@ impl Loudness {
             sampled,
             sub_octave,
             hf_tilt,
-            Self::PROBE_RATE,
+            rate,
         ) else {
             return 1.0;
         };
