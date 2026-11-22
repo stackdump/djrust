@@ -678,6 +678,10 @@ pub struct Lane {
     /// mono): -1 left ... +1 right, NaN when no macro holds it. It replaces `pan` and the
     /// voices' spread for as long as it lasts (beats sends the channel's MIDI pan, CC 10).
     pan_move: f64,
+    /// The net's own pan (`Track::pan`): -1 left ... +1 right, NaN when it has none. Hard, one
+    /// pan for all the lane's voices, with or without `.stereo`; a pan macro's hold wins while it
+    /// lasts and lets go back to it.
+    pan_fixed: f64,
     /// A shape macro's multiplier on the lane's note decay (tighten, loosen, pulse); 1 = none.
     decay_move: f64,
     /// `.subtractive`: each voice's two-pole lowpass (`fz1`, `fz2`) whose cutoff is `f_base` x
@@ -926,6 +930,7 @@ impl Lane {
             voice_spread: Vec::new(),
             voice_pan: Vec::new(),
             pan_move: f64::NAN,
+            pan_fixed: f64::NAN,
             decay_move: 1.0,
             f_amount: 0.0,
             f_base: 0.0,
@@ -2260,6 +2265,14 @@ fn build_lanes(
                         lane.voice_pan = vec![pan; lane.poly];
                     }
                 }
+                // the net's own pan (`track.pan`) is the lane's, `.stereo` or not: hard to its
+                // side, one pan for all its voices, its level trimmed so the loud channel plays
+                // what the part does unpanned
+                if let Some(p) = tr.pan {
+                    lane.pan_fixed = p;
+                    lane.voice_spread.clear();
+                    lane.st[LEVEL] *= 1.0 / (1.0 + libm::fabs(p));
+                }
                 if opts.duck_depth > 0.0 {
                     lane.ducks = key == "tonal"
                         && matches!(tr.group.as_deref(), Some("bass") | Some("harmony"));
@@ -2587,14 +2600,16 @@ fn bind_kit(lane: &mut Lane, kind: &str, kit: &SamplerSource, bank: &dyn Sampler
 }
 
 impl Lane {
-    /// The lane's side gain as the mix sees it: its stereo placement, or a pan macro's hold
-    /// (left = mid + side, so a pan to the left is a positive side).
+    /// The lane's side gain as the mix sees it: a pan macro's hold, else the net's own pan, else
+    /// its stereo placement (left = mid + side, so a pan to the left is a positive side).
     #[inline]
     fn side_gain(&self) -> f64 {
-        if self.pan_move.is_nan() {
-            self.pan
-        } else {
+        if !self.pan_move.is_nan() {
             -self.pan_move
+        } else if !self.pan_fixed.is_nan() {
+            -self.pan_fixed
+        } else {
+            self.pan
         }
     }
 }
@@ -3367,10 +3382,11 @@ fn lane_sample(lanes: &mut [Lane], li: usize, sr: f64, mix: &mut Mix) {
     mix.acc_echo += out * lane.echo_send;
     // a spread lane has no post chain (`build_lanes`), so its voices' side sum is still in step;
     // nor has a wide unison one
-    let s = if lane.pan_move.is_nan() {
+    let s = if lane.pan_move.is_nan() && lane.pan_fixed.is_nan() {
         (if spread { side } else { out * lane.pan }) + uside
     } else {
-        // a pan macro holds the lane: one pan for all its voices, no unison width
+        // a pan macro holds the lane, or the net has its own pan: one pan for all its voices,
+        // no unison width
         out * lane.side_gain()
     };
     mix.add_tone(out, s);
@@ -4139,12 +4155,13 @@ impl WaveRunner {
         self.sampler_side.reset();
     }
 
-    /// Does a pan macro hold any lane right now?
+    /// Does a pan macro hold any lane right now, or has a lane its net's own pan? Either puts
+    /// the mix on two channels without `.stereo`.
     fn pan_moving(&self) -> bool {
         self.current
             .iter()
             .chain(self.fading.iter())
-            .any(|p| p.lanes.iter().any(|l| !l.pan_move.is_nan()))
+            .any(|p| p.lanes.iter().any(|l| !l.pan_move.is_nan() || !l.pan_fixed.is_nan()))
     }
 
     fn lane_selected(l: &Lane, which: MacroTargets) -> bool {
