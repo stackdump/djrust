@@ -38,6 +38,13 @@ pub const MAX_UNISON: usize = 8;
 /// A diphthong's second vowel starts this long after the note, ms, and takes this time constant.
 const GLIDE_AT_MS: f64 = 110.0;
 const GLIDE_MS: f64 = 75.0;
+/// A diphthong that glides to `oo` (`oh`, `ow`: the lips round as it closes) ends with F1 and F2 (and a
+/// little F3) lower than the plain `oo` of "book": a held `oh` then settles on a rounded [o], not on
+/// the `oo` it passes through (they were the same formants to the hertz before).
+const ROUND_TO: f64 = 6.0;
+const ROUND_F1: f64 = 0.95;
+const ROUND_F2: f64 = 0.78;
+const ROUND_F3: f64 = 0.97;
 /// Samples between coefficient updates (the formant glide, vibrato depth ramp).
 pub const CONTROL_PERIOD: u32 = 32;
 
@@ -66,14 +73,17 @@ const fn shape(f: [f64; 3], f4: f64, amp: [f64; 3]) -> VowelShape {
     }
 }
 
-/// The table (adult male; F1-F3 Peterson & Barney 1952, F4/F5 and bandwidths Klatt 1980).
+/// The table (adult male; F1-F3 Peterson & Barney 1952, F4/F5 and bandwidths Klatt 1980), with two entries
+/// moved a little to keep the sung back vowels apart: in speech `a` (730/1090 Hz) and `ah` (640/1190) are only
+/// 1.0 Bark from each other and context tells them apart; a held note has no context, and `ah` is the schwa,
+/// the most common vowel of a lyric, so `a` sits at 770/1040 and `ah` at 610/1260 (1.7 Bark).
 pub const VOWELS: [VowelShape; 10] = [
-    shape([730.0, 1090.0, 2440.0], 3300.0, [1.0, 0.50, 0.25]), // a  (father)
+    shape([770.0, 1040.0, 2440.0], 3300.0, [1.0, 0.50, 0.25]), // a  (father; a little more open and back than the adult-male mean, see below)
     shape([530.0, 1840.0, 2480.0], 3300.0, [1.0, 0.40, 0.25]), // e  (bed)
     shape([270.0, 2290.0, 3010.0], 3400.0, [1.0, 0.25, 0.20]), // i  (beet)
     shape([570.0, 840.0, 2410.0], 3300.0, [1.0, 0.45, 0.15]),  // o  (bought)
     shape([300.0, 870.0, 2240.0], 3300.0, [1.0, 0.30, 0.10]),  // u  (boot)
-    shape([640.0, 1190.0, 2390.0], 3300.0, [1.0, 0.55, 0.25]), // ah (but)
+    shape([610.0, 1260.0, 2390.0], 3300.0, [1.0, 0.55, 0.25]), // ah (but, and the schwa of "the" and "a": a little more central than the mean)
     shape([440.0, 1020.0, 2240.0], 3300.0, [1.0, 0.35, 0.12]), // oo (book)
     shape([660.0, 1720.0, 2410.0], 3300.0, [1.0, 0.40, 0.25]), // ae (cat)
     shape([390.0, 1990.0, 2550.0], 3300.0, [1.0, 0.35, 0.20]), // ih (bit)
@@ -1356,6 +1366,11 @@ impl FormantVoice {
                 if t_ms >= GLIDE_AT_MS && self.coda_t.is_none() {
                     self.glide_to = None;
                     self.set_target(p, g);
+                    if g == ROUND_TO {
+                        self.tgt[0] += libm::log2(ROUND_F1);
+                        self.tgt[1] += libm::log2(ROUND_F2);
+                        self.tgt[2] += libm::log2(ROUND_F3);
+                    }
                     self.glide_k = glide_coef(GLIDE_MS, sr);
                 }
             }
@@ -1812,7 +1827,7 @@ mod tests {
     fn the_formant_shift_moves_every_peak() {
         // +4 semitones: x 1.26
         let ps = peaks(0.0, 4.0);
-        let want = 730.0 * cents(400.0);
+        let want = VOWELS[0].f[0] * cents(400.0);
         assert!(
             ps.iter().any(|p| libm::fabs(p - want) / want < 0.06),
             "{ps:?}"
@@ -2213,9 +2228,34 @@ mod tests {
             v.sample(&p, 1.0, SR);
         }
         let late = v.formants();
-        // a (730/1090) toward ih (390/1990)
+        // a (770/1040) toward ih (390/1990)
         assert!(early[0] > 650.0 && early[1] < 1300.0, "{early:?}");
         assert!((late[0] - 390.0).abs() < 60.0 && (late[1] - 1990.0).abs() < 200.0, "{late:?}");
+    }
+
+    #[test]
+    fn a_held_oh_settles_on_a_rounded_vowel_not_on_the_oo_it_passes_through() {
+        // before: the off-glide of `oh` and `ow` was the `oo` vowel, so a held `oh` and a held `oo` (book) had the
+        // same formants to the hertz; the lips round on the way (F1 and F2 lower)
+        let p = VoiceParams::default();
+        let held = |syl: Syllable| {
+            let mut v = FormantVoice::new(1);
+            v.start(&p, 110.0, Some(syl), SR);
+            for _ in 0..(SR * 0.8) as usize {
+                v.sample(&p, 1.0, SR);
+            }
+            v.formants()
+        };
+        let mut oh = Syllable::new(Onset::None, 3); // o
+        oh.glide = Some(6); // oo
+        let (oh, oo) = (held(oh), held(Syllable::new(Onset::None, 6)));
+        assert!(oh[1] < oo[1] * 0.85 && oh[0] < oo[0] * 0.98, "oh {oh:?} oo {:?}", oo);
+        assert!(libm::fabs(oh[1] - oo[1] * ROUND_F2) < 15.0, "{oh:?}");
+        // a diphthong that does not end on oo is as it was
+        let mut ay = Syllable::new(Onset::None, 1);
+        ay.glide = Some(8);
+        let ay = held(ay);
+        assert!(libm::fabs(ay[0] - VOWELS[8].f[0]) < 5.0 && libm::fabs(ay[1] - VOWELS[8].f[1]) < 5.0, "{ay:?}");
     }
 
     #[test]
