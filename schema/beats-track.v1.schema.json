@@ -575,6 +575,12 @@
               "type": "string",
               "maxLength": 32,
               "description": "Mixer-section group (drums/bass/chords/harmony/lead/melody/arp/pad/stinger or freeform). Controls how rows section up in the UI."
+            },
+            "pan": {
+              "type": "number",
+              "minimum": -1,
+              "maximum": 1,
+              "description": "Where the net sits in the stereo field, -1 (hard left) to +1 (hard right); missing or 0 is the role's own placement. A net with a pan plays hard on its side at 1/(1+|pan|) of its level, so the loud channel keeps the level the part has unpanned."
             }
           }
         },
