@@ -6,6 +6,7 @@
 //! - [`runner`]: `WaveRunner`, the sample-by-sample renderer into caller buffers
 //! - [`macros`], [`history`]: live-performance controls and the reversible clock
 //! - [`instruments`]: the per-instrument voice table beyond beats' wave engine
+//! - [`acid`]: the 303-style acid voice (`acid`, `acid-square` in that table)
 //! - [`fire`]: the event and tick-anchor records; [`event_ring`]: the overwrite rings the audio
 //!   thread writes them into and the readers' cursors
 //! - [`macro_mirror`], [`marking_mirror`]: the seqlock-published records the audio thread
@@ -15,6 +16,7 @@
 //!
 //! Parity is held by `tests/fixtures/js/wave.json` (written by beats' own JS).
 
+pub mod acid;
 pub mod event_ring;
 pub mod fire;
 pub mod for_palette;
@@ -33,6 +35,7 @@ pub mod studio;
 pub mod synth;
 pub mod voice_tweak;
 
+pub use acid::{AcidLane, AcidParams};
 pub use event_ring::{read_events, EventCursor, LatestRing};
 pub use fire::{FireEvent, FireFlags, TickAnchor, TickAnchorFlags};
 pub use groove::{Drift, GrooveTemplate, HitRecord};

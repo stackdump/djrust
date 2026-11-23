@@ -60,7 +60,8 @@ pub struct VoiceSpec {
     pub decay_scale: f64,
     pub max_decay: f64,
     // beyond beats
-    /// "table" (wavetable) | "pluck" (Karplus-Strong string, as Tone's PluckSynth).
+    /// "table" (wavetable) | "pluck" (Karplus-Strong string, as Tone's PluckSynth) | "formant"
+    /// (a sung voice, `fx::formant`) | "acid" (a 303-style voice, `wave::acid`).
     pub engine: String,
     /// pluck: noise burst length in periods of the note.
     pub attack_noise: f64,
@@ -85,6 +86,10 @@ pub struct VoiceSpec {
     /// a `"voicePreset"` overlay. None on every other voice.
     #[cfg_attr(feature = "transfer", serde(default))]
     pub formant: Option<crate::fx::formant::VoiceParams>,
+    /// The `"acid"` engine's knobs (`wave::acid`, a 303-style voice): set by an `"engine": "acid"`
+    /// entry (its defaults) or an `"acid"` overlay object. None on every other voice.
+    #[cfg_attr(feature = "transfer", serde(default))]
+    pub acid: Option<super::acid::AcidParams>,
 }
 
 impl VoiceSpec {
@@ -121,6 +126,7 @@ impl VoiceSpec {
             pitch_to: 1.0,
             pitch_time: 0.0,
             formant: None,
+            acid: None,
         }
     }
 
@@ -230,6 +236,14 @@ impl VoiceSpec {
         }
         if let Some(x) = n("pitchTime") {
             self.pitch_time = x;
+        }
+        // `"engine": "acid"` plays the acid voice at its knobs' defaults; an `"acid"` object sets them
+        if self.engine == "acid" && self.acid.is_none() {
+            self.acid = Some(super::acid::AcidParams::default());
+        }
+        if let Some(a) = v.get("acid").filter(|a| a.as_object().is_some()) {
+            self.acid = Some(super::acid::AcidParams::from_json(a, self.acid.unwrap_or_default()));
+            self.engine = "acid".into();
         }
         if let Some(p) = v
             .get("voicePreset")

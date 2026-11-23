@@ -24,6 +24,18 @@ pub fn fixture(name: &str) -> JsonValue {
     JsonValue::parse(&text).unwrap_or_else(|e| panic!("{path}: {e}"))
 }
 
+/// The instrument table as the Swift app has it (`Resources/voices/instruments.json`): djrust's
+/// own less the voices beyond Swift, the `"acid"` engine's (`acid`, `acid-square`), which Swift
+/// plays as their family's plain saw. A Swift golden is compared against this table.
+pub fn swift_instruments() -> &'static djrust::wave::InstrumentTable {
+    static TABLE: std::sync::OnceLock<djrust::wave::InstrumentTable> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut t = djrust::wave::InstrumentTable::shared().clone();
+        t.entries.retain(|_, e| e.get("engine").and_then(JsonValue::as_str) != Some("acid"));
+        t
+    })
+}
+
 pub fn rows<'a>(doc: &'a JsonValue, key: &str) -> &'a [JsonValue] {
     doc.get(key)
         .and_then(JsonValue::as_array)

@@ -1,8 +1,17 @@
 {
- "comment": "Per-instrument synth voices for the app (InstrumentTable). Each entry overlays the instrument's wave-engine family voice. Engine params are beats' Tone.js presets (public/audio/tone-engine.js); level is calibrated by InstrumentTableTests to sit with the family voices. Sampled instruments are chosen separately, by category (categories.json, VoiceCatalog).",
+ "comment": "Per-instrument synth voices for the app (InstrumentTable). Each entry overlays the instrument's wave-engine family voice. Engine params are beats' Tone.js presets (public/audio/tone-engine.js), except the acid voices (engine acid: dj's own 303-style voice, src/wave/acid.rs; acid-square is its square switch and no beats instrument); level is calibrated by InstrumentTableTests to sit with the family voices. Sampled instruments are chosen separately, by category (categories.json, VoiceCatalog).",
  "instruments": {
   "bass": {
    "level": 0.31
+  },
+  "acid": {
+   "engine": "acid",
+   "level": 0.2
+  },
+  "acid-square": {
+   "engine": "acid",
+   "wave": "square",
+   "level": 0.13
   },
   "acoustic-guitar": {
    "engine": "pluck",

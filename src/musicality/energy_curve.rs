@@ -45,6 +45,23 @@ impl EnergyCurve {
     /// set against what it already plays: each section is probed (`Loudness::measure`) and
     /// given the gain that puts it `SPAN_DB × (1 − energy)` under the most energetic one.
     pub fn new(project: &Project) -> Option<EnergyCurve> {
+        Self::new_on(None, project)
+    }
+
+    /// [`new`](Self::new) with the sections probed on the deck's own instrument table
+    /// (`WaveOptions::instruments`), so they are heard as the deck plays them; None: the bundled
+    /// one, as Swift.
+    pub fn new_on(
+        instruments: Option<&'static crate::wave::instruments::InstrumentTable>,
+        project: &Project,
+    ) -> Option<EnergyCurve> {
+        let measure = |start: i64| {
+            let o = crate::wave::runner::WaveOptions {
+                instruments,
+                ..Default::default()
+            };
+            Loudness::measure_with(project, Some(start), Loudness::PROBE_RATE, o)
+        };
         if project.structure.len() <= 1 {
             return None;
         }
@@ -102,7 +119,7 @@ impl EnergyCurve {
             }
         }
         let peak = peak?.0.clone();
-        let reference = Loudness::measure(project, Some(first_start[&peak]), Loudness::PROBE_RATE)?;
+        let reference = measure(first_start[&peak])?;
         let mut section_db: BTreeMap<String, f64> = BTreeMap::new();
         for (name, p) in &by_name {
             let target = -Self::SPAN_DB * (1.0 - (p.0 / x_max).min(1.0));
@@ -110,9 +127,7 @@ impl EnergyCurve {
                 section_db.insert(name.clone(), 0.0);
                 continue;
             }
-            let Some(level) =
-                Loudness::measure(project, Some(first_start[name]), Loudness::PROBE_RATE)
-            else {
+            let Some(level) = measure(first_start[name]) else {
                 section_db.insert(name.clone(), target);
                 continue;
             };

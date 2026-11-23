@@ -168,12 +168,31 @@ impl Loudness {
         genre: Option<&str>,
         section_gain: f64,
     ) -> f64 {
+        Self::gain_on(None, project, fixes, balance, sampled, sub_octave, hf_tilt, genre, section_gain)
+    }
+
+    /// [`gain`](Self::gain) with the probe on the deck's own instrument table
+    /// (`WaveOptions::instruments`), so it hears the voices the deck plays; None: the bundled
+    /// one, as Swift.
+    #[allow(clippy::too_many_arguments)]
+    pub fn gain_on(
+        instruments: Option<&'static InstrumentTable>,
+        project: &Project,
+        fixes: Fixes,
+        balance: Option<&BTreeMap<String, f64>>,
+        sampled: &BTreeMap<String, f64>,
+        sub_octave: bool,
+        hf_tilt: Option<HfTilt>,
+        genre: Option<&str>,
+        section_gain: f64,
+    ) -> f64 {
         let rate = if Self::has_formant_voice(project) {
             Self::FORMANT_PROBE_RATE
         } else {
             Self::PROBE_RATE
         };
         let Some(measured) = Self::measure_fixed(
+            instruments,
             project,
             None,
             fixes,
@@ -196,6 +215,7 @@ impl Loudness {
     /// trims `balance`, the sampled parts' stand-in levels and the deck's sub-octave and tilt.
     #[allow(clippy::too_many_arguments)]
     pub fn measure_fixed(
+        instruments: Option<&'static InstrumentTable>,
         project: &Project,
         start: Option<i64>,
         fixes: Fixes,
@@ -206,6 +226,7 @@ impl Loudness {
         probe_rate: f64,
     ) -> Option<f64> {
         let mut o = WaveOptions {
+            instruments,
             musicality: fixes & Self::VOICE_FIXES,
             probe_levels: sampled.clone(),
             sub_octave,
@@ -226,7 +247,8 @@ impl Loudness {
     }
 
     /// `measure` with extra runner options (the instrument table and the linear master are
-    /// set here, as in Swift).
+    /// set here, as in Swift; a table the options already name is kept, so the probe hears the
+    /// voices the deck plays).
     pub fn measure_with(
         project: &Project,
         start: Option<i64>,
@@ -234,7 +256,7 @@ impl Loudness {
         mut o: WaveOptions,
     ) -> Option<f64> {
         let start = start.unwrap_or_else(|| Self::busiest_start(project));
-        o.instruments = Some(InstrumentTable::shared());
+        o.instruments = Some(o.instruments.unwrap_or_else(InstrumentTable::shared));
         o.master = Master::Linear;
         let mut runner = WaveRunner::new(probe_rate, o.clone());
         runner.load_prepared(WaveRunner::prepare(project, probe_rate, &o, start));

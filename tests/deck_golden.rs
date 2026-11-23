@@ -22,6 +22,7 @@
 //! A later part that adds cases to the section (the track pipeline) adds them in
 //! `tools/paritydump/deck.swift` and, if it needs a new command, one arm in [`apply`] here.
 
+mod common;
 mod common_fixture;
 
 use std::sync::atomic::Ordering;
@@ -35,7 +36,7 @@ use djrust::musicality::fixes::Fixes;
 use djrust::pflow::Project;
 use djrust::wave::net::str_hash;
 use djrust::wave::{Master, MarkingLayout, MarkingSnapshot, NetMacro, WaveOptions, WaveRunner};
-use djrust::{compose, wave::InstrumentTable};
+use djrust::compose;
 use djrust::host::deck::{Command, DeckCore, DeckMirror};
 
 /// How far a render may be from Swift's, relative to the case's own peak, where it is not the
@@ -110,7 +111,8 @@ fn options(case: &JsonValue) -> WaveOptions {
         ..Default::default()
     };
     if flag(case, "instruments") {
-        o.instruments = Some(InstrumentTable::shared());
+        // Swift's table: the acid voice is beyond Swift
+        o.instruments = Some(common::swift_instruments());
     }
     for name in case
         .get("fixes")

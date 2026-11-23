@@ -308,7 +308,8 @@ fn build_options(case: &JsonValue) -> WaveOptions {
         ..Default::default()
     };
     if flag(case, "instruments") {
-        o.instruments = Some(InstrumentTable::shared());
+        // Swift's table: the acid voice is beyond Swift
+        o.instruments = Some(swift_instruments());
     }
     for name in case
         .get("fixes")
@@ -944,7 +945,7 @@ fn the_sampled_kit_decisions_match_swift() {
     ] {
         let mut o = WaveOptions {
             master: Master::Linear,
-            instruments: Some(InstrumentTable::shared()),
+            instruments: Some(swift_instruments()),
             bank: (variant != "parity").then(|| std::sync::Arc::new(KitBank::default()) as _),
             ..Default::default()
         };
@@ -1067,7 +1068,7 @@ fn part_levels_match_swift() {
             f(r, "db"),
         );
     }
-    let table = InstrumentTable::shared();
+    let table = swift_instruments();
     for r in rows(pl, "own") {
         let (instrument, g, sr) = (s(r, "instrument"), s(r, "group"), f(r, "rate"));
         let voice = table.voice(Some(instrument), Some(g));

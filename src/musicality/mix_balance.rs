@@ -179,10 +179,24 @@ impl MixBalance {
         family: Option<&str>,
         hf_tilt: Option<HfTilt>,
     ) -> BTreeMap<String, f64> {
+        Self::trims_on(None, project, fixes, family, hf_tilt)
+    }
+
+    /// [`trims`](Self::trims) with the probe on the deck's own instrument table
+    /// (`WaveOptions::instruments`), so it hears the voices the deck plays; None: the bundled
+    /// one, as Swift.
+    pub fn trims_on(
+        instruments: Option<&'static crate::wave::instruments::InstrumentTable>,
+        project: &Project,
+        fixes: Fixes,
+        family: Option<&str>,
+        hf_tilt: Option<HfTilt>,
+    ) -> BTreeMap<String, f64> {
         let target = Self::targets(family);
         let start = Loudness::busiest_start(project);
         let mut level: BTreeMap<&str, f64> = BTreeMap::new();
         let o = WaveOptions {
+            instruments,
             musicality: fixes & Loudness::VOICE_FIXES,
             hf_tilt,
             ..Default::default()
@@ -286,10 +300,11 @@ impl MixBalance {
         o.master = Master::Linear;
         o.track_gain = Some(1.0);
         if o.musicality.contains(Fixes::ENERGY) && o.track_energy.is_none() {
-            o.track_energy = EnergyCurve::new(played);
+            o.track_energy = EnergyCurve::new_on(opts.instruments, played);
         }
         if o.musicality.contains(Fixes::BALANCE) && o.track_balance.is_none() {
-            o.track_balance = Some(Self::trims(
+            o.track_balance = Some(Self::trims_on(
+                opts.instruments,
                 played,
                 o.musicality,
                 Self::family(o.genre.as_deref()),

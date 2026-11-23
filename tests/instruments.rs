@@ -137,12 +137,14 @@ fn every_entry_is_a_beats_instrument_with_a_known_engine() {
         }
     }
     assert!(plucked().len() >= 8);
+    // dj's own voices beyond beats' instruments: the acid voice's square switch
+    let own = ["acid-square"];
     for n in table().names() {
         assert!(
-            used.contains(n),
+            used.contains(n) || own.contains(&n),
             "{n} is an instrument beats' generator picks"
         );
-        assert!(["table", "pluck"].contains(&voice(n).engine.as_str()));
+        assert!(["table", "pluck", "acid"].contains(&voice(n).engine.as_str()));
     }
 }
 
@@ -151,6 +153,9 @@ fn the_parity_path_ignores_the_table() {
     let plain = tonal_voice(Some("acoustic-guitar"), Some("melody"));
     assert_eq!(plain.engine, "table");
     assert_eq!(voice("acoustic-guitar").engine, "pluck");
+    // beats' acid is its plain saw bass; the app's is the 303-style voice
+    assert_eq!(tonal_voice(Some("acid"), Some("bass")).engine, "table");
+    assert_eq!(table().voice(Some("acid"), Some("bass")).engine, "acid");
     assert_eq!(
         voice("supersaw"),
         tonal_voice(Some("supersaw"), Some("melody"))

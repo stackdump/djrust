@@ -36,6 +36,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicI32, Ordering};
 
+use super::acid::AcidLane;
 use super::event_ring::LatestRing;
 use super::fire::{FireEvent, FireFlags, TickAnchor, TickAnchorFlags};
 use super::groove::{groove_hash, Drift, FeelTable, GrooveTemplate, HitRecord, Voice, STEPS};
@@ -578,6 +579,10 @@ pub struct Lane {
     is_pluck: bool,
     /// The `"formant"` engine (`fx::formant`): every pooled voice sings. None on any other lane.
     formant: Option<FormantLane>,
+    /// The `"acid"` engine (`wave::acid`): every pooled voice is a 303-style voice of its own (an
+    /// oscillator, a ladder, two envelopes). None on any other lane.
+    #[cfg_attr(feature = "transfer", serde(default))]
+    acid: Option<AcidLane>,
     dl: Vec<f32>,
     dmax: usize,
     dw: Vec<usize>,
@@ -879,6 +884,7 @@ impl Lane {
             held_note: Vec::new(),
             is_pluck: false,
             formant: None,
+            acid: None,
             dl: Vec::new(),
             dmax: 0,
             dw: Vec::new(),
@@ -1264,6 +1270,16 @@ impl Lane {
         self.formant.is_some()
     }
 
+    /// Is this lane the acid voice (the `"acid"` engine)?
+    pub fn is_acid(&self) -> bool {
+        self.acid.is_some()
+    }
+
+    /// An acid lane's voices and knobs (None: not an acid lane).
+    pub fn acid(&self) -> Option<&AcidLane> {
+        self.acid.as_ref()
+    }
+
     /// The vowel a formant lane's notes without a syllable sing (None: not a formant lane).
     pub fn vowel(&self) -> Option<f64> {
         self.formant.as_ref().map(|f| f.vowel)
@@ -1334,6 +1350,9 @@ impl Lane {
         self.tz2 = 0.0;
         self.choking = false;
         self.kit_held_until = f64::NEG_INFINITY;
+        if let Some(a) = self.acid.as_mut() {
+            a.silence();
+        }
     }
 }
 
@@ -1395,6 +1414,10 @@ fn tonal_lane(voice: &VoiceSpec, sr: f64, poly: usize, caches: &mut Caches, seed
         let params = voice.formant.unwrap_or_default();
         lane.formant = Some(FormantLane::new(params, poly, seed));
     }
+    if voice.engine == "acid" {
+        let params = voice.acid.unwrap_or_default();
+        lane.acid = Some(AcidLane::new(params, voice.wave == "square", poly, sr));
+    }
     lane.vib_inc = voice.vibrato_rate / sr;
     if !lane.is_pluck {
         // every wavetable lane can sweep (the sound panel turns it on live): its multipliers,
@@ -1442,7 +1465,8 @@ fn tonal_lane(voice: &VoiceSpec, sr: f64, poly: usize, caches: &mut Caches, seed
 /// `.subtractive`: give a saw / square lane its band-limited tables and filter envelope
 /// (`shapeVoice`; the tables are `MipTables::shared`).
 pub(super) fn shape_voice(lane: &mut Lane, group: &str, plucked: &BTreeSet<String>, sr: f64) {
-    if lane.is_pluck || lane.formant.is_some() {
+    // (the acid voice has a filter of its own)
+    if lane.is_pluck || lane.formant.is_some() || lane.acid.is_some() {
         return;
     }
     let Some(f) = FilterEnvelope::for_voice(&lane.voice, group, plucked) else {
@@ -1470,7 +1494,7 @@ pub(super) fn shape_voice(lane: &mut Lane, group: &str, plucked: &BTreeSet<Strin
 /// when the pair is unfiltered (a filtered pair shares one filter: its difference would not be)
 /// (`detune`).
 pub(super) fn detune(lane: &mut Lane, group: &str, wide: bool, design: &VoiceDesign, sr: f64) {
-    if lane.is_pluck || lane.formant.is_some() {
+    if lane.is_pluck || lane.formant.is_some() || lane.acid.is_some() {
         return;
     }
     let Some(c) = Unison::cents(&lane.voice, group) else {
@@ -1497,6 +1521,7 @@ pub(super) fn detune(lane: &mut Lane, group: &str, wide: bool, design: &VoiceDes
 
 /// `.subOctave`: give a synth bass lane a sine per voice an octave down (`addSubOctave`).
 pub(super) fn add_sub_octave(lane: &mut Lane, sr: f64) {
+    // (the acid voice takes it too, under its filter: the genre wants a sine under its bass)
     if !lane.is_tonal || lane.is_pluck || lane.formant.is_some() {
         return;
     }
@@ -2702,6 +2727,17 @@ fn trigger(lane: &mut Lane, sr: f64, note: i64, w: f64, dur_ms: f64, sweep_x: f6
 #[allow(clippy::too_many_arguments)]
 fn trigger_expr(lane: &mut Lane, sr: f64, note: i64, w: f64, dur_ms: f64, sweep_x: f64, e: NoteExpr) {
     lane.active = true;
+    // the acid voice: an accent in the velocity, a slide on the note's glide, one note at a time
+    if let Some(a) = lane.acid.as_mut() {
+        let dur = if dur_ms > 0.0 { dur_ms } else { 100.0 };
+        let v = a.strike(note, libm::round(w * 127.0), dur, &e, lane.decay_move);
+        lane.last_voice = Some(v);
+        if !lane.voice_spread.is_empty() {
+            let width = (((note - 52) as f64) / 15.0).clamp(0.0, 1.0);
+            lane.voice_pan[v] = lane.pan + lane.voice_spread[v] * width;
+        }
+        return;
+    }
     let mut v = 0;
     let mut best = f64::INFINITY;
     for k in 0..lane.poly {
@@ -3234,111 +3270,140 @@ fn lane_sample(lanes: &mut [Lane], li: usize, sr: f64, mix: &mut Mix) {
         lane.vib_phase = vp;
         vib = 1.0 + lane.vib_depth * libm::sin(TAU * vp);
     }
-    for k in 0..lane.poly {
-        let sd = lane.sd[k];
-        let sa = lane.sa[k];
-        if libm::fabs(sd) < SILENT && libm::fabs(sa) < SILENT {
-            continue;
-        }
-        live = true;
-        let env = sd + sa;
-        env_sum += env;
-        let md = match lane.formant.as_mut() {
-            Some(f) if !lane.hold[k] => f.gate_md(k, lane.md[k], sr),
-            _ => lane.md[k],
-        };
-        lane.sd[k] = sd * if lane.hold[k] { 1.0 } else { md };
-        lane.sa[k] = sa * am;
-        if lane.is_pluck {
-            let y = env * pluck_sample(lane, k, fmk * vib);
+    if let Some(a) = lane.acid.as_mut() {
+        // the acid voice: each voice its own oscillator, ladder and envelopes
+        a.advance();
+        live = a.sweeping();
+        let bend = fmk * vib;
+        for k in 0..a.voices.len() {
+            if a.voices[k].silent() {
+                continue;
+            }
+            live = true;
+            env_sum += a.voices[k].level();
+            let mut y = a.sample(k, bend);
+            if !lane.sub_phase.is_empty() {
+                // `.subOctave`: a clean sine an octave down, at the voice's level
+                let half = a.voices[k].rate() * bend * 0.5;
+                let mut sp = lane.sub_phase[k] + half;
+                sp -= libm::floor(sp);
+                lane.sub_phase[k] = sp;
+                if half >= lane.sub_min_rate {
+                    y += SubOctave::GAIN * libm::sin(TAU * sp) * a.voices[k].level();
+                }
+            }
             out += y;
             if spread {
                 side += y * lane.voice_pan[k];
             }
-            continue;
         }
-        if let Some(f) = lane.formant.as_mut() {
-            let y = env * f.voices[k].sample(&f.params, fmk * vib, sr);
-            out += y;
-            if spread {
-                side += y * lane.voice_pan[k];
+    } else {
+        for k in 0..lane.poly {
+            let sd = lane.sd[k];
+            let sa = lane.sa[k];
+            if libm::fabs(sd) < SILENT && libm::fabs(sa) < SILENT {
+                continue;
             }
-            continue;
-        }
-        let mut rate = lane.inc[k] * fmk * vib;
-        if !lane.npm.is_empty() {
-            let p = lane.npm[k];
-            if p != 1.0 {
+            live = true;
+            let env = sd + sa;
+            env_sum += env;
+            let md = match lane.formant.as_mut() {
+                Some(f) if !lane.hold[k] => f.gate_md(k, lane.md[k], sr),
+                _ => lane.md[k],
+            };
+            lane.sd[k] = sd * if lane.hold[k] { 1.0 } else { md };
+            lane.sa[k] = sa * am;
+            if lane.is_pluck {
+                let y = env * pluck_sample(lane, k, fmk * vib);
+                out += y;
+                if spread {
+                    side += y * lane.voice_pan[k];
+                }
+                continue;
+            }
+            if let Some(f) = lane.formant.as_mut() {
+                let y = env * f.voices[k].sample(&f.params, fmk * vib, sr);
+                out += y;
+                if spread {
+                    side += y * lane.voice_pan[k];
+                }
+                continue;
+            }
+            let mut rate = lane.inc[k] * fmk * vib;
+            if !lane.npm.is_empty() {
+                let p = lane.npm[k];
+                if p != 1.0 {
+                    rate *= p;
+                    // towards 1, exponentially; on 1 once it would pass it
+                    let next = p * lane.npm_mul[k];
+                    lane.npm[k] = if (p > 1.0) == (next > 1.0) && next != 1.0 { next } else { 1.0 };
+                }
+            }
+            if lane.pm_on {
+                let p = lane.pm[k];
                 rate *= p;
-                // towards 1, exponentially; on 1 once it would pass it
-                let next = p * lane.npm_mul[k];
-                lane.npm[k] = if (p > 1.0) == (next > 1.0) && next != 1.0 { next } else { 1.0 };
-            }
-        }
-        if lane.pm_on {
-            let p = lane.pm[k];
-            rate *= p;
-            let next = p * lane.pm_mul;
-            let to = lane.pitch_to;
-            lane.pm[k] = if lane.pm_mul < 1.0 {
-                if next < to {
+                let next = p * lane.pm_mul;
+                let to = lane.pitch_to;
+                lane.pm[k] = if lane.pm_mul < 1.0 {
+                    if next < to {
+                        to
+                    } else {
+                        next
+                    }
+                } else if next > to {
                     to
                 } else {
                     next
+                };
+                if lane.mip_on {
+                    // falling: step down to the richest table that still fits under Nyquist
+                    let hz = rate * sr;
+                    let mut b = lane.mip_base[k] / (WAVE_TABLE_SIZE + 1);
+                    while b > 0 && lane.mip_top[b - 1] >= hz * 1.06 {
+                        b -= 1;
+                    }
+                    lane.mip_base[k] = b * (WAVE_TABLE_SIZE + 1);
                 }
-            } else if next > to {
-                to
+            }
+            let mut osc;
+            if lane.phase2.is_empty() {
+                let mut ph = lane.phase[k] + rate;
+                ph -= libm::floor(ph);
+                lane.phase[k] = ph;
+                osc = table_read(lane, k, ph);
             } else {
-                next
-            };
-            if lane.mip_on {
-                // falling: step down to the richest table that still fits under Nyquist
-                let hz = rate * sr;
-                let mut b = lane.mip_base[k] / (WAVE_TABLE_SIZE + 1);
-                while b > 0 && lane.mip_top[b - 1] >= hz * 1.06 {
-                    b -= 1;
+                let mut ph = lane.phase[k] + rate * lane.uni_down;
+                ph -= libm::floor(ph);
+                lane.phase[k] = ph;
+                let mut ph2 = lane.phase2[k] + rate * lane.uni_up;
+                ph2 -= libm::floor(ph2);
+                lane.phase2[k] = ph2;
+                let o1 = table_read(lane, k, ph);
+                let o2 = table_read(lane, k, ph2);
+                // equal power: two uncorrelated oscillators as loud as one
+                osc = (o1 + o2) * EQUAL_POWER;
+                if lane.uni_wide {
+                    uside += env * (o1 - o2) * EQUAL_POWER * lane.uni_width[k];
                 }
-                lane.mip_base[k] = b * (WAVE_TABLE_SIZE + 1);
             }
-        }
-        let mut osc;
-        if lane.phase2.is_empty() {
-            let mut ph = lane.phase[k] + rate;
-            ph -= libm::floor(ph);
-            lane.phase[k] = ph;
-            osc = table_read(lane, k, ph);
-        } else {
-            let mut ph = lane.phase[k] + rate * lane.uni_down;
-            ph -= libm::floor(ph);
-            lane.phase[k] = ph;
-            let mut ph2 = lane.phase2[k] + rate * lane.uni_up;
-            ph2 -= libm::floor(ph2);
-            lane.phase2[k] = ph2;
-            let o1 = table_read(lane, k, ph);
-            let o2 = table_read(lane, k, ph2);
-            // equal power: two uncorrelated oscillators as loud as one
-            osc = (o1 + o2) * EQUAL_POWER;
-            if lane.uni_wide {
-                uside += env * (o1 - o2) * EQUAL_POWER * lane.uni_width[k];
+            if lane.f_amount > 0.0 {
+                osc = filter_sample(lane, k, osc, rate * sr, sr);
             }
-        }
-        if lane.f_amount > 0.0 {
-            osc = filter_sample(lane, k, osc, rate * sr, sr);
-        }
-        if !lane.sub_phase.is_empty() {
-            // `.subOctave`: after the filter, a clean sine an octave down
-            let half = rate * 0.5;
-            let mut sp = lane.sub_phase[k] + half;
-            sp -= libm::floor(sp);
-            lane.sub_phase[k] = sp;
-            if half >= lane.sub_min_rate {
-                osc += SubOctave::GAIN * libm::sin(TAU * sp);
+            if !lane.sub_phase.is_empty() {
+                // `.subOctave`: after the filter, a clean sine an octave down
+                let half = rate * 0.5;
+                let mut sp = lane.sub_phase[k] + half;
+                sp -= libm::floor(sp);
+                lane.sub_phase[k] = sp;
+                if half >= lane.sub_min_rate {
+                    osc += SubOctave::GAIN * libm::sin(TAU * sp);
+                }
             }
-        }
-        let y = env * osc;
-        out += y;
-        if spread {
-            side += y * lane.voice_pan[k];
+            let y = env * osc;
+            out += y;
+            if spread {
+                side += y * lane.voice_pan[k];
+            }
         }
     }
     lane.st[ENV] = env_sum;
@@ -3974,7 +4039,8 @@ impl WaveRunner {
             if balance || rests {
                 let mut o = opts.clone();
                 if balance {
-                    o.track_balance = Some(MixBalance::trims(
+                    o.track_balance = Some(MixBalance::trims_on(
+                        opts.instruments,
                         project,
                         opts.musicality,
                         MixBalance::family(opts.genre.as_deref()),
@@ -4009,7 +4075,7 @@ impl WaveRunner {
             prepared.energy = opts
                 .track_energy
                 .clone()
-                .or_else(|| EnergyCurve::new(project));
+                .or_else(|| EnergyCurve::new_on(opts.instruments, project));
         }
         if opts.musicality.contains(Fixes::RISER) {
             prepared.riser = RiserVoice::new(
@@ -4037,7 +4103,9 @@ impl WaveRunner {
             } else {
                 None
             };
-            prepared.gain = Loudness::gain(
+            // (on the deck's own table: the probe hears the voices the deck plays)
+            prepared.gain = Loudness::gain_on(
+                opts.instruments,
                 project,
                 opts.musicality,
                 balance,
@@ -4610,6 +4678,13 @@ impl WaveRunner {
             return;
         }
         lane.active = true;
+        if let Some(a) = lane.acid.as_mut() {
+            // a key played while another is held slides from it
+            let v = a.hold(note, velocity.clamp(1, 127) as f64);
+            lane.hold[v] = true;
+            lane.held_note[v] = note;
+            return;
+        }
         let w = velocity.clamp(1, 127) as f64 / 127.0;
         let mut v = 0;
         let mut best = f64::INFINITY;
@@ -4645,6 +4720,9 @@ impl WaveRunner {
             self.queue_key(slot, 0x80, note, 0);
             return;
         }
+        if let Some(a) = lane.acid.as_mut() {
+            a.release(note);
+        }
         for k in 0..lane.poly {
             if lane.hold[k] && lane.held_note[k] == note {
                 lane.hold[k] = false;
@@ -4662,6 +4740,9 @@ impl WaveRunner {
         let live = proj.live_lane;
         let lane = &mut proj.lanes[live];
         let slot = lane.sample_slot;
+        if let Some(a) = lane.acid.as_mut() {
+            a.release_all();
+        }
         for k in 0..lane.poly {
             lane.hold[k] = false;
             lane.held_note[k] = -1;
