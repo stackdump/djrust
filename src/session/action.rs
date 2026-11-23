@@ -35,10 +35,16 @@ pub enum DeckAction {
         deck: String,
         slot: i64,
     },
-    /// `op`: in | out | halve | double.
+    /// `op`: in | out | halve | double, and beyond Swift exit (leave the loop).
     Loop {
         deck: String,
         op: String,
+    },
+    /// Beyond Swift: move the deck `beats` beats along its music (negative is back), keeping
+    /// its place in the beat (`Engine::beat_jump`).
+    BeatJump {
+        deck: String,
+        beats: f64,
     },
     /// `name`: volume | filter | gain | eqLow | eqMid | eqHigh | pitch | mute | reverbWet |
     /// reverbSize | reverbTone | autoGain.
@@ -349,8 +355,9 @@ pub const DEFAULT_MIX_IN_BARS: i64 = 4;
 /// `DJEngine.defaultLoopQuantum` (LoopLaunch.swift): the one number is the loop row's.
 pub use crate::deck::loops::DEFAULT_LOOP_QUANTUM;
 
-/// Every `op` `from_json` decodes, in its order (`DeckAction.jsonOps`).
-pub const JSON_OPS: [&str; 75] = [
+/// Every `op` `from_json` decodes, in its order (`DeckAction.jsonOps`, and last the ones beyond
+/// Swift).
+pub const JSON_OPS: [&str; 76] = [
     "play",
     "cue",
     "hotCue",
@@ -426,6 +433,7 @@ pub const JSON_OPS: [&str; 75] = [
     "autoMix",
     "autoMixNow",
     "autoMixDefer",
+    "beatJump",
 ];
 
 fn s(v: &str) -> JsonValue {
@@ -492,6 +500,7 @@ impl DeckAction {
             HotCue { deck, slot } => o("hotCue", vec![d(deck), ("slot", i(*slot))]),
             ClearCue { deck, slot } => o("clearCue", vec![d(deck), ("slot", i(*slot))]),
             Loop { deck, op } => o("loop", vec![d(deck), ("loop", s(op))]),
+            BeatJump { deck, beats } => o("beatJump", vec![d(deck), ("beats", n(*beats))]),
             Param { deck, name, value } => o(
                 "param",
                 vec![d(deck), ("name", s(name)), ("value", n(*value))],
@@ -712,6 +721,11 @@ impl DeckAction {
             "loop" => Loop {
                 deck,
                 op: st_or("loop", ""),
+            },
+            // a jump says how far: no `beats`, no action
+            "beatJump" => BeatJump {
+                deck,
+                beats: v.get("beats").and_then(JsonValue::as_f64)?,
             },
             "param" => Param {
                 deck,

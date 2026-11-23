@@ -1493,6 +1493,9 @@ impl Engine {
             self.decks[i].mirror.publish_mutes(&p.project.graph.muted);
         }
         let marking = p.project.marking.clone();
+        // a net loop holds the clock inside its window, where the bar line a playing deck's
+        // project waits for may never come: it ends now, and the deck plays on to the swap
+        self.send(Msg::Deck(i, Command::NetLoop(crate::wave::NetLoopOp::Exit)));
         let ok = self.send(Msg::Deck(i, Command::Load(p.project)));
         if ok {
             // the project's marking mirror and layout are kept for the readers (`remember`)

@@ -52,8 +52,9 @@ pub use net::{
 pub use part_levels::{own_part_level_db, own_synth_part_db, SamplerPartLevels};
 pub use rests::{MixOutTail, RestSchedule};
 pub use runner::{
-    audition, ChannelVoice, Lane, Master, PartLevelFn, RoleFilter, SampleKey, SamplerHost,
-    SamplerSlots, StingerPolicy, VoiceShaping, WaveMod, WaveOptions, WaveProject, WaveRunner,
+    audition, ChannelVoice, Lane, Master, NetLoopOp, PartLevelFn, RoleFilter, SampleKey,
+    SamplerHost, SamplerSlots, StingerPolicy, VoiceShaping, WaveMod, WaveOptions, WaveProject,
+    WaveRunner, NET_LOOP_MAX,
 };
 pub use studio::{CatalogId, StudioEvent, StudioShell};
 pub use synth::{
