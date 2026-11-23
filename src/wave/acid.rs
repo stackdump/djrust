@@ -38,7 +38,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::json::JsonValue;
-use crate::pflow::{NoteExpr, PITCH_DROP_MS};
+use crate::pflow::{AcidKnobs, NoteExpr, ACID_ENV_OCT, PITCH_DROP_MS};
 
 /// The velocity at and below which a note has no accent: above BeatScript's default 100 and the
 /// ten either way a humanize moves it (an accent adds 27 to it, to 127).
@@ -76,6 +76,10 @@ const K_MAX: f64 = 3.9;
 const COMP: f64 = 0.35;
 /// The oscillator's level into the ladder: under the saturation's knee.
 const DRIVE: f64 = 0.5;
+/// How much further the drive knob turned all the way pushes the oscillator into the ladder's
+/// saturation (x [`DRIVE`], on top of 1). The level is given back after the ladder, so the knob
+/// adds grit, not loudness.
+const DRIVE_MAX: f64 = 3.0;
 /// The output stage's knee: a symmetric soft clip (`knee x tanh(y / knee)`) on the ladder's
 /// output, in the voice's own units (the saw is +-1 into the ladder).
 const KNEE: f64 = 0.4;
@@ -99,6 +103,10 @@ pub struct AcidParams {
     pub decay: f64,
     /// 0..1: how much an accent does (the accent knob).
     pub accent: f64,
+    /// 0..1: how hard the oscillator drives the ladder's saturation (0, the default, is the
+    /// clean voice; a little is a driven 303's grit).
+    #[cfg_attr(feature = "transfer", serde(default))]
+    pub drive: f64,
 }
 
 impl Default for AcidParams {
@@ -109,13 +117,14 @@ impl Default for AcidParams {
             env_mod: 2.7,
             decay: 0.3,
             accent: 0.8,
+            drive: 0.0,
         }
     }
 }
 
 impl AcidParams {
     /// `base` with the knobs `v` names (`cutoff` Hz, `resonance`, `envMod` octaves, `decay` s,
-    /// `accent`), each clamped to what the voice takes.
+    /// `accent`, `drive`), each clamped to what the voice takes.
     pub fn from_json(v: &JsonValue, base: AcidParams) -> AcidParams {
         let n = |k: &str, d: f64, lo: f64, hi: f64| {
             v.get(k)
@@ -129,6 +138,21 @@ impl AcidParams {
             env_mod: n("envMod", base.env_mod, 0.0, 6.0),
             decay: n("decay", base.decay, 0.01, 10.0),
             accent: n("accent", base.accent, 0.0, 1.0),
+            drive: n("drive", base.drive, 0.0, 1.0),
+        }
+    }
+
+    /// These knobs with a note's own settings over them (`cutoff=`, `res=`, `env=`, `accent=`,
+    /// `drive=` on a BeatScript part).
+    pub fn with(self, k: &AcidKnobs) -> AcidParams {
+        let pct = |v: Option<u8>, d: f64| v.map_or(d, |v| f64::from(v) / 100.0);
+        AcidParams {
+            cutoff: if k.cutoff_hz > 0 { f64::from(k.cutoff_hz) } else { self.cutoff },
+            resonance: pct(k.res, self.resonance),
+            env_mod: k.env.map_or(self.env_mod, |v| f64::from(v) / 100.0 * ACID_ENV_OCT),
+            decay: self.decay,
+            accent: pct(k.accent, self.accent),
+            drive: pct(k.drive, self.drive),
         }
     }
 }
@@ -166,6 +190,13 @@ pub struct AcidVoice {
     env_mul: f64,
     /// The struck note's accent (x the knob).
     acc: f64,
+    /// The knobs it plays at (the lane's, or the note's own): the cutoff's log2, the envelope's
+    /// octaves, the ladder's feedback and the level it gives back, the oscillator's level in.
+    log_cutoff: f64,
+    env_mod: f64,
+    k: f64,
+    comp: f64,
+    drive: f64,
     /// The ladder's four integrators and the coupling highpass.
     s: [f64; 4],
     hp_x: f64,
@@ -228,6 +259,8 @@ pub struct AcidLane {
     k: f64,
     comp: f64,
     log_cutoff: f64,
+    /// The oscillator's level into the ladder at the drive knob.
+    drive: f64,
     fc_max: f64,
     chord: u32,
 }
@@ -287,6 +320,7 @@ impl AcidLane {
             k,
             comp: 1.0 + COMP * k,
             log_cutoff: libm::log2(params.cutoff.max(FC_MIN)),
+            drive: DRIVE * (1.0 + DRIVE_MAX * params.drive.clamp(0.0, 1.0)),
             fc_max: 0.45 * sr,
             chord: (CHORD_S * sr) as u32,
         }
@@ -339,8 +373,21 @@ impl AcidLane {
         }
     }
 
+    /// A voice's knobs for a note that says `knobs`: the lane's own where it says none, computed
+    /// as the lane computes them, so a plain note sounds exactly as it always did.
+    fn knobs(&self, knobs: &AcidKnobs) -> (f64, f64, f64, f64, f64, f64) {
+        if knobs.is_plain() {
+            return (self.params.accent, self.log_cutoff, self.params.env_mod, self.k, self.comp, self.drive);
+        }
+        let p = self.params.with(knobs);
+        let k = K_MAX * p.resonance.clamp(0.0, 1.0);
+        let drive = DRIVE * (1.0 + DRIVE_MAX * p.drive.clamp(0.0, 1.0));
+        (p.accent, libm::log2(p.cutoff.max(FC_MIN)), p.env_mod, k, 1.0 + COMP * k, drive)
+    }
+
     fn play(&mut self, note: i64, vel: f64, gate: u32, e: &NoteExpr, decay_move: f64) -> usize {
-        let acc = accent_of(vel) * self.params.accent.clamp(0.0, 1.0);
+        let (accent, log_cutoff, env_mod, kk, comp, drive) = self.knobs(&e.acid);
+        let acc = accent_of(vel) * accent.clamp(0.0, 1.0);
         let w = (vel / 127.0).clamp(0.0, 1.0);
         let peak = w * (1.0 + ACCENT_GAIN * acc);
         let to = log_rate(note, self.inv_sr);
@@ -354,6 +401,7 @@ impl AcidLane {
             v.peak = peak;
             v.acc = v.acc.max(acc);
             v.gate = gate;
+            (v.log_cutoff, v.env_mod, v.k, v.comp, v.drive) = (log_cutoff, env_mod, kk, comp, drive);
             lv
         } else {
             // one note at a time: the note before is let go, unless this one is a chord with it
@@ -397,6 +445,7 @@ impl AcidLane {
             v.acc = acc;
             v.peak = peak;
             v.gate = gate;
+            (v.log_cutoff, v.env_mod, v.k, v.comp, v.drive) = (log_cutoff, env_mod, kk, comp, drive);
             k
         };
         self.last = Some(k);
@@ -422,7 +471,7 @@ impl AcidLane {
 
     /// One sample of voice `k`; `bend` multiplies its pitch (vibrato, a nested ring's FM).
     pub fn sample(&mut self, k: usize, bend: f64) -> f64 {
-        let (square, p, sweep) = (self.square, self.params, self.sweep);
+        let (square, sweep) = (self.square, self.sweep);
         let v = &mut self.voices[k];
         // pitch: a slide or a pitch drop on its way
         if v.slide_k > 0.0 {
@@ -458,25 +507,25 @@ impl AcidLane {
         }
         // the filter's envelope, and the lane's accent sweep on top
         v.env = flush(v.env * v.env_mul);
-        let cv = self.log_cutoff + (p.env_mod + ACCENT_DIRECT * v.acc) * v.env + ACCENT_OCT * sweep;
+        let cv = v.log_cutoff + (v.env_mod + ACCENT_DIRECT * v.acc) * v.env + ACCENT_OCT * sweep;
         let fc = libm::exp2(cv).clamp(FC_MIN, self.fc_max);
         let g = libm::tan(core::f64::consts::PI * fc * self.inv_sr);
         let gg = g / (1.0 + g);
         // four one-pole stages (trapezoidal), the feedback solved for this sample, then the
         // stage input saturated
-        let x = DRIVE * osc;
+        let x = v.drive * osc;
         let b = 1.0 - gg;
         let g2 = gg * gg;
         let sum = g2 * gg * b * v.s[0] + g2 * b * v.s[1] + gg * b * v.s[2] + b * v.s[3];
-        let y4 = (g2 * g2 * x + sum) / (1.0 + self.k * g2 * g2);
-        let mut y = libm::tanh(x - self.k * y4);
+        let y4 = (g2 * g2 * x + sum) / (1.0 + v.k * g2 * g2);
+        let mut y = libm::tanh(x - v.k * y4);
         for s in v.s.iter_mut() {
             let d = (y - *s) * gg;
             let o = d + *s;
             *s = flush(o + d);
             y = o;
         }
-        let y = y * self.comp / DRIVE;
+        let y = y * v.comp / v.drive;
         // the output stage: a symmetric soft clip, before the highpass takes off what DC it makes
         let y = KNEE * libm::tanh(y / KNEE);
         let h = y - v.hp_x + self.hp_r * v.hp_y;
@@ -557,7 +606,7 @@ mod tests {
     fn bounded_with_every_knob_at_its_end() {
         for square in [false, true] {
             for (res, env, cut) in [(1.0, 6.0, 12_000.0), (1.0, 0.0, 20.0), (1.0, 6.0, 20.0), (0.0, 6.0, 300.0), (0.0, 0.0, 12_000.0)] {
-                let p = AcidParams { cutoff: cut, resonance: res, env_mod: env, decay: 10.0, accent: 1.0 };
+                let p = AcidParams { cutoff: cut, resonance: res, env_mod: env, decay: 10.0, accent: 1.0, drive: 1.0 };
                 let x = line(&mut AcidLane::new(p, square, 2, SR), &workout(), 3.2);
                 assert!(x.iter().all(|v| v.is_finite()));
                 assert!(peak(&x) < 8.0, "res {res} env {env} cutoff {cut}: peak {}", peak(&x));
@@ -656,6 +705,73 @@ mod tests {
         lane.advance();
         let b = lane.strike(52, 100.0, 500.0, &NoteExpr::default(), 1.0);
         assert_ne!(a, b);
+    }
+
+    /// A line's sound brightness: the RMS of its first difference over its RMS (higher, more top).
+    fn brightness(x: &[f64]) -> f64 {
+        let e: f64 = x.iter().map(|v| v * v).sum();
+        let d: f64 = x.windows(2).map(|w| (w[1] - w[0]) * (w[1] - w[0])).sum();
+        (d / e.max(1e-30)).sqrt()
+    }
+
+    fn one(knobs: AcidKnobs, vel: f64, seconds: f64) -> Vec<f64> {
+        let mut lane = AcidLane::new(AcidParams::default(), false, 1, SR);
+        let e = NoteExpr { acid: knobs, ..NoteExpr::default() };
+        lane.strike(33, vel, seconds * 1000.0, &e, 1.0);
+        (0..(seconds * SR) as usize)
+            .map(|_| {
+                lane.advance();
+                lane.sample(0, 1.0)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_note_without_knobs_plays_the_lanes_and_a_notes_knobs_change_it() {
+        // knobs the note does not set are the lane's, to the sample
+        let plain = one(AcidKnobs::default(), 100.0, 0.3);
+        let unset = one(AcidKnobs { res: None, ..AcidKnobs::default() }, 100.0, 0.3);
+        assert!(plain == unset);
+        // the cutoff knob opens the filter; the envelope knob at 0 leaves no sweep
+        let open = one(AcidKnobs { cutoff_hz: 2000, ..AcidKnobs::default() }, 100.0, 0.3);
+        assert!(brightness(&open) > brightness(&plain) * 1.3, "{} vs {}", brightness(&open), brightness(&plain));
+        let flat = one(AcidKnobs { env: Some(0), ..AcidKnobs::default() }, 100.0, 0.3);
+        assert!(brightness(&flat) < brightness(&plain));
+        // knobs a note sets to the lane's own values sound as the lane does (within rounding)
+        let same = one(AcidKnobs { cutoff_hz: 300, res: Some(72), env: Some(45), accent: Some(80), drive: Some(0) }, 100.0, 0.3);
+        let err = plain.iter().zip(&same).fold(0.0_f64, |m, (a, b)| m.max((a - b).abs()));
+        assert!(err < 1e-6, "{err}");
+    }
+
+    #[test]
+    fn the_filter_moves_on_each_strike() {
+        // the envelope sweeps the cutoff down: the note's start is brighter than its end
+        let x = one(AcidKnobs::default(), 100.0, 0.4);
+        let n = x.len();
+        let (head, tail) = (&x[n / 40..n / 8], &x[n * 5 / 8..n * 7 / 8]);
+        assert!(brightness(head) > brightness(tail) * 1.25, "{} then {}", brightness(head), brightness(tail));
+    }
+
+    #[test]
+    fn an_accent_opens_the_filter_and_is_louder() {
+        let plain = one(AcidKnobs::default(), 100.0, 0.2);
+        let acc = one(AcidKnobs::default(), 127.0, 0.2);
+        assert!(peak(&acc) > peak(&plain));
+        assert!(brightness(&acc[..2400]) > brightness(&plain[..2400]));
+        // and the accent knob at 0 takes the accent away (it is only the velocity's level then)
+        let none = one(AcidKnobs { accent: Some(0), ..AcidKnobs::default() }, 127.0, 0.2);
+        assert!(brightness(&none[..2400]) < brightness(&acc[..2400]));
+    }
+
+    #[test]
+    fn drive_adds_grit_not_level_and_stays_bounded() {
+        let clean = one(AcidKnobs::default(), 127.0, 0.3);
+        let driven = one(AcidKnobs { drive: Some(100), res: Some(100), ..AcidKnobs::default() }, 127.0, 0.3);
+        assert!(driven.iter().all(|v| v.is_finite()));
+        assert!(peak(&driven) < 2.0 * peak(&clean), "{} vs {}", peak(&driven), peak(&clean));
+        let light = one(AcidKnobs { drive: Some(30), ..AcidKnobs::default() }, 100.0, 0.3);
+        let plain = one(AcidKnobs::default(), 100.0, 0.3);
+        assert!(light != plain, "the drive knob changes the sound");
     }
 
     #[test]
