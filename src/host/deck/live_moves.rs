@@ -14,7 +14,7 @@
 //! | `source` | `bus` (`V`, `M`) + `action` `grab` (`bars`) / `start` (`bars`) / `end`: a capture from a bus |
 //! | `loops` | `action: stop_all`: every loop out |
 //! | `pitch_range` | `deck`, `range` |
-//! | `loop_beats` | `deck`, `beats` (a sample deck's auto-loop) |
+//! | `loop_beats` | `deck`, `beats` (a deck's auto-loop: on a sample deck's grid, or a net deck's steps) |
 //! | `seek` | `deck`, `sample` |
 //! | `autonext` | `deck`, `on`, `bars` |
 //! | `transport` | as the socket's: `action` `start` / `stop` / `lock` (`deck`) / `unlock` / `free_bpm` (`bpm`), and `running` (`on`: the flag alone, the auto transport's) |

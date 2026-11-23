@@ -644,6 +644,14 @@ fn every_action() -> Vec<DeckAction> {
             bars: 4,
         },
         DeckAction::Rewind { deck: d("A") },
+        DeckAction::BeatJump {
+            deck: d("A"),
+            beats: 8.0,
+        },
+        DeckAction::BeatJump {
+            deck: d("B"),
+            beats: -0.5,
+        },
         DeckAction::Focus { deck: d("B") },
         DeckAction::StemMute {
             deck: d("A"),

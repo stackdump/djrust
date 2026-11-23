@@ -1361,6 +1361,17 @@ fn keys_align_chase_every_macro_and_permanent_fires_allocate_nothing() {
         e.command("A", Command::AllNotesOff);
         measured(&what("release"), &mut r, 200, &mut l, &mut rr);
 
+        // beyond Swift: a net loop of a beat wrapping over and over (each wrap takes the net
+        // back through its history), halved and doubled, then left
+        e.loop_beats("A", 1.0);
+        measured(&what("a net loop wrapping"), &mut r, 600, &mut l, &mut rr);
+        e.loop_halve("A");
+        e.loop_double("A");
+        e.loop_double("A");
+        measured(&what("a net loop halved and doubled"), &mut r, 600, &mut l, &mut rr);
+        e.exit_loop("A");
+        measured(&what("out of a net loop"), &mut r, 200, &mut l, &mut rr);
+
         // every master macro at once (overlapping: every slider and the feel tempo move), then
         // re-fired mid-flight with other lengths
         for m in MasterMacro::ALL {

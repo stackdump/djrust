@@ -695,7 +695,7 @@ fn what_a_net_deck_does_with_the_beat_actions_is_not_unhandled() {
             deck: "A".into(),
             slot: 0,
         },
-        Action::LoopIn { deck: "A".into() }, // a no-op on a net, as in Swift
+        Action::LoopIn { deck: "A".into() }, // a no-op on a net in Swift; a net loop here
         Action::LoopOut { deck: "A".into() },
         Action::LoopHalve { deck: "A".into() },
         Action::LoopDouble { deck: "A".into() },

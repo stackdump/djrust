@@ -40,6 +40,8 @@ pub fn touch_of_op(op: &str) -> Option<AutoMixTouch> {
         "load" | "clip" | "nextTrack" => Some(AutoMixTouch::Load),
         "cue" | "hotCue" | "loop" | "section" | "sync" | "follow" | "rewind" | "setKit"
         | "setPalette" | "setRoleVoice" | "mixOut" | "mixIn" => Some(AutoMixTouch::Steer),
+        // beyond Swift: a beat jump steers as a hot cue does
+        "beatJump" => Some(AutoMixTouch::Steer),
         _ => None,
     }
 }

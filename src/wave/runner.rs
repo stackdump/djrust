@@ -3620,7 +3620,40 @@ pub struct WaveRunner {
     /// `i64::MIN` for none (stopped, or the tick a queued project took over on, which plays
     /// nothing).
     riser_step: i64,
+    /// A net deck's loop (beyond Swift): the window `(start, end)` of song steps the clock wraps
+    /// in ([`net_loop_op`](Self::net_loop_op)), and where LOOP IN marked a start.
+    net_loop: Option<(i64, i64)>,
+    net_loop_in: Option<i64>,
 }
+
+/// What a net deck's loop buttons ask of the runner (beyond Swift: Swift's loop buttons do
+/// nothing on a net deck). Positions are song steps: step `k` is the one the clock plays when
+/// the graph's tick goes from `k` to `k + 1`; a beat is 4 steps, a bar 16. `unit` is the line
+/// a position snaps to: 1 (a step), 4 (a beat) or 16 (a bar).
+///
+/// The runner works the window out from its own clock, so a press lands on the line the audio
+/// is at, not the one the main thread last saw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NetLoopOp {
+    /// A loop `len` steps long from the `unit` line at or before the playhead (`loopBeats`).
+    Beats { len: i64, unit: i64 },
+    /// LOOP IN: mark the start at the `unit` line nearest the playhead, leaving any loop.
+    In { unit: i64 },
+    /// LOOP OUT: close the loop at the `unit` line nearest the playhead and loop; while
+    /// looping, leave the loop.
+    Out { unit: i64 },
+    /// The loop to its first half (not under one step).
+    Halve,
+    /// The loop twice as long (not over [`NET_LOOP_MAX`]).
+    Double,
+    /// Leave the loop: the clock plays on from where it is, through the window's end.
+    Exit,
+}
+
+/// The longest net loop, in steps (64 beats): half of what the graph's history keeps
+/// ([`WaveGraph::HISTORY_TICKS`]), which is what a wrap rewinds through, so a loop that fits is
+/// always one the history can take back.
+pub const NET_LOOP_MAX: i64 = (WaveGraph::HISTORY_TICKS / 2) as i64;
 
 /// The longest block the per-block buffers of the runner hold (Swift's 4096): a longer one
 /// plays without the fixes that need them.
@@ -3722,6 +3755,8 @@ impl WaveRunner {
             pre_s: vec![0.0; MAX_BLOCK],
             tone_s: vec![0.0; MAX_BLOCK],
             riser_step: i64::MIN,
+            net_loop: None,
+            net_loop_in: None,
         };
         r.clock[TEMPO] = 120.0;
         r.clock[SPT] = r.spt(120.0);
@@ -4089,6 +4124,9 @@ impl WaveRunner {
     fn install(&mut self, next: WaveProject) {
         self.flush_groove();
         self.energy_primed = false;
+        // a loop is a window of the project that played: another project ends it
+        self.net_loop = None;
+        self.net_loop_in = None;
         // Pointer swap: the old project's lanes ring out.
         if let Some(old) = self.current.take() {
             if let Some(gone) = self.fading.replace(old) {
@@ -4135,6 +4173,9 @@ impl WaveRunner {
         self.playing = false;
         self.clock_broken = true;
         self.macro_hold_ticks = 0;
+        // back to the top: the loop's window and mark go with the place they were in
+        self.net_loop = None;
+        self.net_loop_in = None;
         if let Some(p) = self.current.as_mut() {
             p.graph.reset();
             p.rest_cursor.reset();
@@ -4424,6 +4465,117 @@ impl WaveRunner {
             .as_ref()
             .and_then(|p| p.tail)
             .map(|t| t.end_tick())
+    }
+
+    // MARK: the net loop (beyond Swift)
+
+    /// Where the playhead is, in song steps: inside the step that sounds while the clock runs
+    /// (the one the last tick played, `tick_phase` of the way in), on the step it plays next
+    /// while it does not.
+    fn loop_position(&self) -> Option<f64> {
+        let tick = self.graph()?.tick;
+        Some(if self.playing && tick > 0 {
+            (tick - 1) as f64 + self.tick_phase()
+        } else {
+            tick as f64
+        })
+    }
+
+    /// A net deck's loop button ([`NetLoopOp`]). The window is worked out from this clock. A
+    /// window shorter than a step or longer than [`NET_LOOP_MAX`] is refused (nothing changes),
+    /// and so is anything without a project.
+    ///
+    /// While a loop holds, the clock plays the window's steps over and over: at the tick that
+    /// would play its end step, the net goes back to its start through the graph's history
+    /// ([`WaveGraph::unadvance`], what the jog scratches with), so every pass fires what the
+    /// first did. What the ticks in the window changed goes back with them: the marking, the
+    /// mutes and slots the song's control nets set, a macro's countdown (a macro fired inside
+    /// the window is taken back at the next wrap). The performer's own mutes (`set_role_muted`,
+    /// `set_mute_hash`) are not in the history and stay.
+    pub fn net_loop_op(&mut self, op: NetLoopOp) {
+        let Some(p) = self.loop_position() else {
+            return;
+        };
+        let line = |unit: i64, nearest: bool| -> i64 {
+            let u = unit.max(1) as f64;
+            let k = if nearest {
+                libm::round(p / u)
+            } else {
+                libm::floor(p / u)
+            };
+            (k * u) as i64
+        };
+        match op {
+            NetLoopOp::Beats { len, unit } => {
+                let start = line(unit, false);
+                self.set_net_loop(start, start + len);
+            }
+            NetLoopOp::In { unit } => {
+                self.net_loop = None;
+                self.net_loop_in = Some(line(unit, true).max(0));
+            }
+            NetLoopOp::Out { unit } => {
+                if self.net_loop.is_some() {
+                    self.net_loop = None;
+                } else if let Some(start) = self.net_loop_in {
+                    self.set_net_loop(start, line(unit, true));
+                }
+            }
+            NetLoopOp::Halve => {
+                if let Some((s, e)) = self.net_loop.filter(|(s, e)| e - s >= 2) {
+                    self.net_loop = Some((s, s + (e - s) / 2));
+                }
+            }
+            NetLoopOp::Double => {
+                if let Some((s, e)) = self.net_loop {
+                    self.set_net_loop(s, s + 2 * (e - s));
+                }
+            }
+            NetLoopOp::Exit => self.net_loop = None,
+        }
+    }
+
+    /// Loop `start..end` if it is a window a wrap can always take back.
+    fn set_net_loop(&mut self, start: i64, end: i64) {
+        if start >= 0 && end > start && end - start <= NET_LOOP_MAX {
+            self.net_loop = Some((start, end));
+            self.net_loop_in = Some(start);
+        }
+    }
+
+    /// The net loop's window `(start, end)` in song steps, while one holds.
+    pub fn net_loop(&self) -> Option<(i64, i64)> {
+        self.net_loop
+    }
+
+    /// Where LOOP IN (or the last loop set) marked a start, in song steps.
+    pub fn net_loop_in(&self) -> Option<i64> {
+        self.net_loop_in
+    }
+
+    /// At the tick that would play the loop's end step (or one past it: a halved window, a
+    /// catch-up), take the net back by whole windows, silently, so the step played next is as
+    /// far into the window as the clock is. The history holds the last 512 ticks (fewer when
+    /// they are busy, none from before the project went in): a window it no longer reaches back
+    /// to is let go, never half wrapped.
+    fn wrap_net_loop(&mut self, proj: &mut WaveProject) {
+        let Some((start, end)) = self.net_loop else {
+            return;
+        };
+        let tick = proj.graph.tick;
+        if tick < end {
+            return;
+        }
+        let len = end - start;
+        let back = (tick - start) - (tick - start) % len;
+        if (proj.graph.rewindable_ticks() as i64) < back {
+            self.net_loop = None;
+            return;
+        }
+        for _ in 0..back {
+            proj.graph.unadvance(|_, _| {});
+        }
+        self.clock_broken = true;
     }
 
     // MARK: macros
@@ -4736,6 +4888,8 @@ impl WaveRunner {
             self.stop();
             return;
         }
+        // A net loop's end: back to the window's start before the step plays.
+        self.wrap_net_loop(&mut proj);
         let sr = self.sample_rate;
         let tempo = self.clock[TEMPO];
         let rec = self.record_events || self.fire_ring.is_some();

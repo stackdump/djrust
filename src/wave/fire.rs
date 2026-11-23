@@ -66,7 +66,8 @@ impl TickAnchorFlags {
     /// Not a step: the clock tick at which a queued project took over (at a bar boundary).
     pub const SWAP: TickAnchorFlags = TickAnchorFlags(1 << 0);
     /// This anchor does not continue the previous one: the net clock was started, paused
-    /// and resumed, stopped, realigned or scratched since, or this is the first anchor.
+    /// and resumed, stopped, realigned or scratched since, a net loop took it back to its
+    /// window's start, or this is the first anchor.
     pub const DISCONTINUITY: TickAnchorFlags = TickAnchorFlags(1 << 1);
 
     pub fn contains(self, other: TickAnchorFlags) -> bool {
