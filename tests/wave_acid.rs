@@ -2,8 +2,10 @@
 //! 303-style voice, beats' (the parity path) its plain saw bass; an accent rides in the velocity
 //! and makes a note louder and brighter, accents in a row build, a note's `glide` slides into it
 //! from the note before without striking again, a note that does not slide lets the one before
-//! go, `decay` is the filter's sweep and the note's length gates its level. Deterministic, the
-//! same at any rate, and under full scale at its own level.
+//! go, a note a slide leaves holds its gate for the glide (round the ring too), `decay` is the
+//! filter's sweep and the note's length gates its level. Deterministic, the same at any rate,
+//! under full scale at its own level, and no harder on the deck's safety limiter than the
+//! wavetable bass.
 
 use djrust::json::JsonValue;
 use djrust::wave::*;
@@ -226,5 +228,68 @@ fn under_full_scale_at_its_own_level() {
         assert!(x.iter().all(|v| v.is_finite()));
         assert!(peak < 0.9, "{inst}: peak {peak}");
         assert!(peak > 0.05, "{inst}: it plays ({peak})");
+    }
+}
+
+fn envelope_at(tempo: f64, inst: &str, notes: &str) -> JsonValue {
+    let params = format!(r#"{{"tempo":{tempo},"steps":16,"parts":{{"bass":{{"instrument":"{inst}","notes":{notes}}}}}}}"#);
+    djrust::roll::envelope(&JsonValue::parse(&params).unwrap()).unwrap()
+}
+
+#[test]
+fn a_slide_off_the_last_step_carries_into_the_downbeat() {
+    // `bass a1 ... e1^` with the acid voice: the glide lands on step 0, and the note on step 15 says
+    // `slide` (the ring cuts its length at the bar line: the gate must not)
+    let bar = 16.0 * STEP;
+    let dip = |notes: &str| {
+        let x = render(&envelope("acid", notes), 2.0 * bar + 0.2);
+        let tail = rms(&x[at(bar - 0.008)..at(bar)]);
+        let body = rms(&x[at(bar - 0.06)..at(bar - 0.04)]);
+        db(body, tail)
+    };
+    let slid = dip(r#"[[0,45,1,100,{"glide":60}],[15,40,1,100,{"slide":true}]]"#);
+    let cut = dip(r#"[[0,45,1,100,{"glide":60}],[15,40,1,100]]"#);
+    assert!(slid < 3.0, "legato into the bar line: {slid} dB down");
+    assert!(cut > 12.0, "without the slide the note is let go first: {cut} dB down");
+    // and the downbeat glides on from it
+    let x = render(&envelope("acid", r#"[[0,57,1,100,{"glide":60}],[15,45,1,100,{"slide":true}]]"#), 2.0 * bar + 0.2);
+    let early = pitch(&x[at(bar + 0.004)..at(bar + 0.03)], 90.0, 330.0);
+    assert!(early > hz(45) * 1.05 && early < hz(57) * 0.95, "gliding up from e1: {early} Hz");
+}
+
+/// The app's render of a part (`WaveOptions::extended`: the loudness gain, the limiting master)
+/// through the deck's safety limiter: the share of samples it works on, its most gain reduction
+/// (dB), and the DC it leaves (the mean over the RMS).
+fn limited(inst: &str, tempo: f64, notes: &str) -> (f64, f64, f64) {
+    let env = envelope_at(tempo, inst, notes);
+    let mut x = render_with(&env, 4.0 * 16.0 * 60.0 / tempo / 4.0, SR, WaveOptions::extended());
+    let mut lim = djrust::fx::PeakLimiter::new(SR);
+    for c in x.chunks_mut(256) {
+        let k = c.len();
+        lim.process(c, None, k);
+    }
+    let st = lim.statistics(&[0.5]);
+    let mean = x.iter().map(|&v| f64::from(v)).sum::<f64>() / x.len() as f64;
+    (st.limited_share, st.max_db, mean / rms(&x))
+}
+
+#[test]
+fn no_harder_on_the_limiter_than_the_bass() {
+    // the saw's reset rings the ladder into one-sided spikes; the output stage keeps them as tame
+    // as the wavetable bass's peaks, so the limiter does not ride (and bias) an acid line
+    let lines = [
+        // plain sixteenths, no accent
+        (126.0, r#"[[0,33,2,100],[1,33,2,100],[2,45,2,100],[3,33,2,100],[4,36,2,100],[5,33,2,100],[6,43,2,100],[7,33,2,100],[8,33,2,100],[9,45,2,100],[10,33,2,100],[11,40,2,100],[12,38,2,100],[13,33,2,100],[14,36,2,100],[15,33,2,100]]"#),
+        // a busy line: accents in a row, slides, a high accented note, a long sweep
+        (132.0, r#"[[0,33,2,127],[1,33,2,127],[2,33,2,127],[3,33,2,127],[4,45,2,100],[5,57,1,127,{"glide":60}],[6,45,2,100],[7,96,1,127],[8,33,8,100,{"decay":10000}],[12,40,2,100,{"glide":60}],[13,45,2,100],[15,57,2,127]]"#),
+    ];
+    for (tempo, notes) in lines {
+        let (bass_share, bass_db, _) = limited("bass", tempo, notes);
+        for inst in ["acid", "acid-square"] {
+            let (share, gr, dc) = limited(inst, tempo, notes);
+            assert!(share <= bass_share, "{inst}: limited on {share} of samples, the bass on {bass_share}");
+            assert!(gr <= bass_db, "{inst}: {gr} dB of reduction at most, the bass {bass_db}");
+            assert!(dc.abs() < 0.01, "{inst}: DC {dc} of the RMS");
+        }
     }
 }

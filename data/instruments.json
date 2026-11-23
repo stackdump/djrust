@@ -6,12 +6,12 @@
   },
   "acid": {
    "engine": "acid",
-   "level": 0.2
+   "level": 0.27
   },
   "acid-square": {
    "engine": "acid",
    "wave": "square",
-   "level": 0.13
+   "level": 0.22
   },
   "acoustic-guitar": {
    "engine": "pluck",

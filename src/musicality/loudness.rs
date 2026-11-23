@@ -113,6 +113,20 @@ impl Loudness {
             .any(|n| crate::fx::formant::instrument_preset(&n.track.instrument).is_some())
     }
 
+    /// Whether any part of `project` plays the acid voice on `table` (its `"acid"` engine): at
+    /// 8 kHz its filter is held under the 4 kHz Nyquist, so the probe hears it about 1 dB quieter
+    /// than it plays; it is probed at [`FORMANT_PROBE_RATE`](Self::FORMANT_PROBE_RATE) too.
+    pub fn has_acid_voice(project: &Project, table: &InstrumentTable) -> bool {
+        project.nets.values().any(|n| {
+            table
+                .entries
+                .get(&n.track.instrument)
+                .and_then(|e| e.get("engine"))
+                .and_then(crate::json::JsonValue::as_str)
+                == Some("acid")
+        })
+    }
+
     /// `targetDB`: loudness the busiest section is brought to, K-weighted mean square of the
     /// summed voices after the master gain.
     pub fn target_db() -> f64 {
@@ -186,12 +200,13 @@ impl Loudness {
         genre: Option<&str>,
         section_gain: f64,
     ) -> f64 {
-        let rate = if Self::has_formant_voice(project) {
+        let table = instruments.unwrap_or_else(InstrumentTable::shared);
+        let rate = if Self::has_formant_voice(project) || Self::has_acid_voice(project, table) {
             Self::FORMANT_PROBE_RATE
         } else {
             Self::PROBE_RATE
         };
-        let Some(measured) = Self::measure_fixed(
+        let Some(measured) = Self::measure_fixed_on(
             instruments,
             project,
             None,
@@ -215,6 +230,22 @@ impl Loudness {
     /// trims `balance`, the sampled parts' stand-in levels and the deck's sub-octave and tilt.
     #[allow(clippy::too_many_arguments)]
     pub fn measure_fixed(
+        project: &Project,
+        start: Option<i64>,
+        fixes: Fixes,
+        balance: Option<&BTreeMap<String, f64>>,
+        sampled: &BTreeMap<String, f64>,
+        sub_octave: bool,
+        hf_tilt: Option<HfTilt>,
+        probe_rate: f64,
+    ) -> Option<f64> {
+        Self::measure_fixed_on(None, project, start, fixes, balance, sampled, sub_octave, hf_tilt, probe_rate)
+    }
+
+    /// [`measure_fixed`](Self::measure_fixed) on the deck's own instrument table; None: the
+    /// bundled one, as Swift.
+    #[allow(clippy::too_many_arguments)]
+    pub fn measure_fixed_on(
         instruments: Option<&'static InstrumentTable>,
         project: &Project,
         start: Option<i64>,

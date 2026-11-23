@@ -1,22 +1,26 @@
 //! The acid voice (`acid`, `acid-square` in the instrument table): a 303-style bass synth, all
 //! synthesis, no samples. One oscillator (a saw, or a square) into a resonant four-pole lowpass
-//! whose cutoff an envelope sweeps on each strike, then the amplifier, which the note's length
-//! gates. An accent makes a note louder, opens the filter further and shortens its sweep, and
+//! whose cutoff an envelope sweeps on each strike, a soft output stage (a 303's clips softly),
+//! then the amplifier, which the note's length gates. An accent makes a note louder, opens the filter further and shortens its sweep, and
 //! accents in a row build on each other (the accent sweep); a slide carries the voice into the
 //! next note without striking it again.
 //!
 //! How a net plays it (the runner's acid lane, `Lane::is_acid`):
 //! - **Accent** is the note's velocity, which is how the nets carry it (BeatScript's `c2!` is
-//!   velocity +27, the acid genre's accent +25): none at [`ACCENT_FROM`] and below, all of it at
-//!   127, in between in proportion.
+//!   velocity +27, the acid genre's accent +25): none at [`ACCENT_FROM`] and below (above where
+//!   a humanized 100 wanders), all of it at 127, in between in proportion.
 //! - **Slide** is a note's `glide`, as on every voice (BeatScript writes it on the note a `^`
 //!   slides into: `glide=` ms, and on this voice 60 ms when the part gives none): the voice still
 //!   sounding the note before goes on, its envelopes are not struck again, and its pitch glides
 //!   to the new note, most of the way in the glide's time (a 303's slide is a lag, fast then
 //!   settling). A held note is not a slide by itself: a tonal part's notes are two steps long
-//!   unless it says otherwise, so a line's notes overlap as written.
+//!   unless it says otherwise, so a line's notes overlap as written. The note a slide leaves says
+//!   `slide` (BeatScript writes it with the glide): its gate stays open past its length until the
+//!   glide comes, as a 303's gate stays high on a slide step, so a slide off a net's last step
+//!   into its first (whose length the ring cuts at its end) is legato too.
 //! - **One note at a time**, as a 303: a note that does not slide lets the one before go. Notes
-//!   within [`CHORD_S`] of each other are a chord and each sounds on a voice of its own.
+//!   within [`CHORD_S`] of each other are a chord and each sounds on a voice of its own (a flam's
+//!   grace, [`FLAM_MS`](crate::pflow::FLAM_MS) ahead, is let go when its note comes).
 //! - **Decay** (the note's `decay`, BeatScript's `decay=`) is the 303's decay knob: how long the
 //!   filter's sweep takes to fall, not the note's level, which the note's length gates.
 //! - A **pitch drop** falls onto the note the way a slide does, in `PITCH_DROP_MS`.
@@ -26,7 +30,9 @@
 //! Deterministic (arithmetic and `libm`, no state outside the voice), the same at every sample
 //! rate (time constants in seconds, the filter prewarped), free of denormals (every state is
 //! flushed to zero under 1e-18) and bounded (the ladder's input is saturated, so at full
-//! resonance it rings and does not run away).
+//! resonance it rings and does not run away). The output stage's soft clip is symmetric and sits
+//! before the coupling highpass: the saw's reset rings the ladder into one-sided spikes, and
+//! clipped there they are no harder on a deck's safety limiter than the wavetable bass's peaks.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -34,14 +40,18 @@ use alloc::vec::Vec;
 use crate::json::JsonValue;
 use crate::pflow::{NoteExpr, PITCH_DROP_MS};
 
-/// The velocity at and below which a note has no accent (BeatScript's default velocity; an
-/// accent adds 27 to it).
-pub const ACCENT_FROM: f64 = 100.0;
+/// The velocity at and below which a note has no accent: above BeatScript's default 100 and the
+/// ten either way a humanize moves it (an accent adds 27 to it, to 127).
+pub const ACCENT_FROM: f64 = 110.0;
 /// A 303's slide, ms: what a live key played while another is held glides in (a net's note says
 /// its own `glide`).
 pub const SLIDE_MS: f64 = 60.0;
-/// Notes this close together are a chord, not a slide, s.
-pub const CHORD_S: f64 = 0.025;
+/// Notes this close together are a chord, s: under a flam's [`FLAM_MS`](crate::pflow::FLAM_MS),
+/// so a grace is let go when its note comes.
+pub const CHORD_S: f64 = 0.012;
+/// How much longer than its length a note that a slide leaves holds its gate (x its length): past
+/// any swing of the note the glide comes on.
+const SLIDE_HOLD: f64 = 1.5;
 /// How much shorter than the note its gate is, ms (at most half the note): a 303's gate falls
 /// before the next step, so two notes in a row are two notes.
 pub const GATE_GAP_MS: f64 = 30.0;
@@ -55,7 +65,7 @@ const HOLD_S: f64 = 2.5;
 /// accent).
 const ACCENT_DECAY_S: f64 = 0.09;
 /// How much louder a full accent is (x the accent knob).
-const ACCENT_GAIN: f64 = 0.45;
+const ACCENT_GAIN: f64 = 0.35;
 /// Octaves a full accent opens the filter by at its strike, and a full accent sweep on top.
 const ACCENT_DIRECT: f64 = 1.2;
 const ACCENT_OCT: f64 = 1.6;
@@ -66,6 +76,9 @@ const K_MAX: f64 = 3.9;
 const COMP: f64 = 0.35;
 /// The oscillator's level into the ladder: under the saturation's knee.
 const DRIVE: f64 = 0.5;
+/// The output stage's knee: a symmetric soft clip (`knee x tanh(y / knee)`) on the ladder's
+/// output, in the voice's own units (the saw is +-1 into the ladder).
+const KNEE: f64 = 0.4;
 /// The output's coupling highpass, Hz.
 const HP_HZ: f64 = 25.0;
 const FC_MIN: f64 = 20.0;
@@ -291,10 +304,12 @@ impl AcidLane {
     }
 
     /// A note from a net: `vel` its velocity (1..127, the accent rides in it), `dur_ms` its length
-    /// (the gate), `e` how it is played (`glide`, `decay`, `pitchDrop`), `decay_move` a shape
+    /// (the gate), `e` how it is played (`glide`, `slide`, `decay`, `pitchDrop`), `decay_move` a shape
     /// macro's multiplier on the sweep's decay. Returns the voice it sounds on.
     pub fn strike(&mut self, note: i64, vel: f64, dur_ms: f64, e: &NoteExpr, decay_move: f64) -> usize {
-        let gate = ((gate_ms(dur_ms) * 0.001 * self.sr) as u32).max(1);
+        // a note a slide leaves holds its gate until the glide comes (a 303's slide step)
+        let ms = if e.slide { dur_ms * SLIDE_HOLD } else { gate_ms(dur_ms) };
+        let gate = ((ms * 0.001 * self.sr) as u32).max(1);
         self.play(note, vel, gate, e, decay_move)
     }
 
@@ -462,6 +477,8 @@ impl AcidLane {
             y = o;
         }
         let y = y * self.comp / DRIVE;
+        // the output stage: a symmetric soft clip, before the highpass takes off what DC it makes
+        let y = KNEE * libm::tanh(y / KNEE);
         let h = y - v.hp_x + self.hp_r * v.hp_y;
         v.hp_x = y;
         v.hp_y = flush(h);
@@ -515,9 +532,10 @@ mod tests {
     #[test]
     fn accent_comes_from_velocity() {
         assert_eq!(accent_of(100.0), 0.0);
+        assert_eq!(accent_of(110.0), 0.0, "a humanized 100 is not accented");
         assert_eq!(accent_of(80.0), 0.0);
         assert_eq!(accent_of(127.0), 1.0);
-        assert!((accent_of(113.5) - 0.5).abs() < 1e-12);
+        assert!((accent_of(118.5) - 0.5).abs() < 1e-12);
     }
 
     /// Accented notes sliding up three octaves, then struck: everything the voice does at once.
@@ -599,6 +617,36 @@ mod tests {
         assert_eq!(lane.hold(43, 100.0), a);
         lane.release(43);
         assert!(!lane.voices[a].gated());
+    }
+
+    #[test]
+    fn a_flams_grace_is_let_go_when_its_note_comes() {
+        let mut lane = AcidLane::new(AcidParams::default(), false, 4, SR);
+        let g = lane.strike(45, 50.0, 500.0, &NoteExpr::default(), 1.0);
+        for _ in 0..(crate::pflow::FLAM_MS * 0.001 * SR) as usize {
+            lane.advance();
+            lane.sample(g, 1.0);
+        }
+        let n = lane.strike(45, 110.0, 500.0, &NoteExpr::default(), 1.0);
+        assert_ne!(g, n);
+        assert!(!lane.voices[g].gated(), "one note at a time: the grace is let go");
+    }
+
+    #[test]
+    fn a_note_a_slide_leaves_holds_its_gate_for_the_glide() {
+        let run = |e: NoteExpr| {
+            let mut lane = AcidLane::new(AcidParams::default(), false, 4, SR);
+            let v = lane.strike(40, 100.0, 125.0, &e, 1.0);
+            for _ in 0..(0.125 * SR) as usize {
+                lane.advance();
+                lane.sample(v, 1.0);
+            }
+            (lane.voices[v].gated(), lane.voices[v].level())
+        };
+        let (open, level) = run(NoteExpr { slide: true, ..NoteExpr::default() });
+        assert!(open && level > 0.5, "open at its length's end, at its level: {level}");
+        let (open, level) = run(NoteExpr::default());
+        assert!(!open && level < 0.05, "a plain note has let go by then: {level}");
     }
 
     #[test]

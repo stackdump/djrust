@@ -189,6 +189,11 @@ pub struct NoteExpr {
     pub ratchet: u8,
     /// `"flam": true`: a soft grace hit on the step, the note itself [`FLAM_MS`] after it.
     pub flam: bool,
+    /// `"slide": true`: a glide follows the note (a 303's slide step). A voice that slides by
+    /// itself (`wave::acid`) holds the note's gate past its length until the glide comes; every
+    /// other voice plays it as written.
+    #[cfg_attr(feature = "transfer", serde(default))]
+    pub slide: bool,
 }
 
 /// How long a `pitchDrop` takes to fall onto the note, in ms.
@@ -211,7 +216,7 @@ impl NoteExpr {
     }
 
     /// Read from a binding's (or a roll note's) JSON: `glide`, `decay`, `pitchDrop`, `ratchet`,
-    /// `flam`. Out-of-range values are clamped; a ratchet of 0 or 1 is none.
+    /// `flam`, `slide`. Out-of-range values are clamped; a ratchet of 0 or 1 is none.
     pub fn from_json(m: &JsonValue) -> NoteExpr {
         let num = |k: &str, hi: f64| -> f64 {
             m.get(k).and_then(JsonValue::as_f64).filter(|v| v.is_finite()).map_or(0.0, |v| libm::round(v).clamp(0.0, hi))
@@ -223,6 +228,7 @@ impl NoteExpr {
             pitch_drop: num("pitchDrop", 48.0) as u8,
             ratchet: if ratchet >= 2 { ratchet } else { 0 },
             flam: m.get("flam").is_some_and(JsonValue::is_truthy),
+            slide: m.get("slide").is_some_and(JsonValue::is_truthy),
         }
     }
 
@@ -242,6 +248,9 @@ impl NoteExpr {
         }
         if self.flam {
             midi.set("flam", JsonValue::Bool(true));
+        }
+        if self.slide {
+            midi.set("slide", JsonValue::Bool(true));
         }
     }
 }
