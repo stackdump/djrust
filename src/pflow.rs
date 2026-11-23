@@ -194,6 +194,64 @@ pub struct NoteExpr {
     /// other voice plays it as written.
     #[cfg_attr(feature = "transfer", serde(default))]
     pub slide: bool,
+    /// The acid voice's knobs for this note (`wave::acid`; BeatScript's `cutoff=`, `res=`,
+    /// `env=`, `accent=`, `drive=` on a part), each where it is set and the voice's own
+    /// otherwise. Every other voice ignores them.
+    #[cfg_attr(feature = "transfer", serde(default))]
+    pub acid: AcidKnobs,
+}
+
+/// A note's own settings of the acid voice's knobs (`"cutoff"` Hz; `"res"`, `"env"`, `"accent"`,
+/// `"drive"` 0..100, a knob's turn as on the box). Unset is the voice's own setting: a cutoff of
+/// 0, the others `None`. Written to a binding only where set, so a document without them keeps
+/// its canonical text and CID.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "transfer", derive(serde::Serialize, serde::Deserialize))]
+pub struct AcidKnobs {
+    /// The filter's floor, Hz ([`ACID_CUTOFF_HZ`]); 0 = the voice's.
+    pub cutoff_hz: u16,
+    /// The resonance, 0..100 (100 rings hardest).
+    pub res: Option<u8>,
+    /// The envelope's depth, 0..100 of [`ACID_ENV_OCT`] octaves.
+    pub env: Option<u8>,
+    /// How much an accent does, 0..100.
+    pub accent: Option<u8>,
+    /// How hard the oscillator drives the filter's saturation, 0..100 (0 the clean voice).
+    pub drive: Option<u8>,
+}
+
+/// The range a note's `cutoff` takes, Hz (the acid voice's cutoff knob).
+pub const ACID_CUTOFF_HZ: (u16, u16) = (20, 12000);
+/// Octaves the acid voice's `env` turned all the way opens the filter by.
+pub const ACID_ENV_OCT: f64 = 6.0;
+
+impl AcidKnobs {
+    pub fn is_plain(&self) -> bool {
+        *self == AcidKnobs::default()
+    }
+
+    fn from_json(m: &JsonValue) -> AcidKnobs {
+        let num = |k: &str| m.get(k).and_then(JsonValue::as_f64).filter(|v| v.is_finite()).map(libm::round);
+        let pct = |k: &str| num(k).map(|v| v.clamp(0.0, 100.0) as u8);
+        AcidKnobs {
+            cutoff_hz: num("cutoff").map_or(0, |v| v.clamp(f64::from(ACID_CUTOFF_HZ.0), f64::from(ACID_CUTOFF_HZ.1)) as u16),
+            res: pct("res"),
+            env: pct("env"),
+            accent: pct("accent"),
+            drive: pct("drive"),
+        }
+    }
+
+    fn write(&self, midi: &mut JsonObject) {
+        if self.cutoff_hz > 0 {
+            midi.set("cutoff", JsonValue::int(i64::from(self.cutoff_hz)));
+        }
+        for (k, v) in [("res", self.res), ("env", self.env), ("accent", self.accent), ("drive", self.drive)] {
+            if let Some(v) = v {
+                midi.set(k, JsonValue::int(i64::from(v)));
+            }
+        }
+    }
 }
 
 /// How long a `pitchDrop` takes to fall onto the note, in ms.
@@ -216,7 +274,7 @@ impl NoteExpr {
     }
 
     /// Read from a binding's (or a roll note's) JSON: `glide`, `decay`, `pitchDrop`, `ratchet`,
-    /// `flam`, `slide`. Out-of-range values are clamped; a ratchet of 0 or 1 is none.
+    /// `flam`, `slide`, and the acid knobs (`cutoff`, `res`, `env`, `accent`, `drive`). Out-of-range values are clamped; a ratchet of 0 or 1 is none.
     pub fn from_json(m: &JsonValue) -> NoteExpr {
         let num = |k: &str, hi: f64| -> f64 {
             m.get(k).and_then(JsonValue::as_f64).filter(|v| v.is_finite()).map_or(0.0, |v| libm::round(v).clamp(0.0, hi))
@@ -229,6 +287,7 @@ impl NoteExpr {
             ratchet: if ratchet >= 2 { ratchet } else { 0 },
             flam: m.get("flam").is_some_and(JsonValue::is_truthy),
             slide: m.get("slide").is_some_and(JsonValue::is_truthy),
+            acid: AcidKnobs::from_json(m),
         }
     }
 
@@ -252,6 +311,7 @@ impl NoteExpr {
         if self.slide {
             midi.set("slide", JsonValue::Bool(true));
         }
+        self.acid.write(midi);
     }
 }
 
