@@ -6,7 +6,8 @@
 //! (controls, kill, reset), master FX sliders and macros, net macros, section launches, role and
 //! stem mutes, stingers, panic, play / rewind, the tempo fader and the nudge, SYNC and QUANTIZE,
 //! the CUE button, hot cues and loop in / out / halve / double (a sample deck's samples, a net
-//! deck's ticks; the loop buttons do nothing on a net, as in Swift), the platter, regenerate
+//! deck's ticks; beyond Swift, where they do nothing on a net, the loop buttons loop a net deck's
+//! steps too: `cues.rs`), the platter, regenerate
 //! (the spec's next version), the seed wheel, the walk (the browser push, SHIFT + the wheel), the
 //! strip's EQ, filter and reverb knobs, the live keys, and the loops' pads. A control that has a
 //! [`DeckAction`](crate::session::action::DeckAction) twin does what the twin does, through

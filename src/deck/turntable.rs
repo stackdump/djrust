@@ -77,6 +77,9 @@ pub enum TurntableCommand {
     Pitch(f64),
     /// Jump the playhead (and scrub target) to this sample.
     Seek(f64),
+    /// Move the playhead (and scrub target) by this many samples from wherever it is when the
+    /// command lands (a beat jump: nothing the main thread read a block ago goes into it).
+    SeekBy(f64),
     /// While playing, wrap the playhead from `end` back to `start` (unwrapped samples).
     Loop {
         start: f64,
@@ -364,6 +367,10 @@ impl Turntable {
             Seek(s) => {
                 self.pos = s;
                 self.target = s;
+            }
+            SeekBy(d) => {
+                self.pos += d;
+                self.target += d;
             }
             Loop { start, end } => {
                 self.loop_start = start;
