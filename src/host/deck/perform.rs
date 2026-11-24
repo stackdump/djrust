@@ -1,7 +1,7 @@
 //! `Engine::perform(DeckAction)`: the one entry for everything a UI, a script or a replay does to
 //! a deck. Port of `DJEngine.perform` and `DJEngine.applyAction` (`Session/SessionRecorder.swift`):
-//! the single switch over the 75 ops, wrapped by the recording of the action that was done in
-//! the form a replay needs.
+//! the single switch over the 75 ops (and the ones beyond Swift: `beatJump`, the loop's `exit`),
+//! wrapped by the recording of the action that was done in the form a replay needs.
 //!
 //! The controller's own [`Action`](crate::control::controller::Action)s reach the same
 //! methods (`surface.rs`), so a button and a `DeckAction` cannot drift apart.
@@ -9,8 +9,9 @@
 //! What an op answers ([`Applied`]):
 //!
 //! - `Done`: it ran.
-//! - `Ignored`: Swift's guard falls through, so does this (a loop in on a net deck, a macro on a
-//!   sample deck, a net-only op on the loop channel). Not an error and not counted.
+//! - `Ignored`: Swift's guard falls through, so does this (a macro on a sample deck, a net-only
+//!   op on the loop channel, a beat jump on a sample deck with no grid). Not an error and not
+//!   counted.
 //! - `Deferred`: a feature a later slice ports. The action is recorded all the same, and
 //!   [`Engine::unhandled`] counts it (`deckaction <op>`), as the monitor's list of what the Mac
 //!   would have done. No op answers it now (auto-mix, its last, is on the decks:
@@ -256,7 +257,18 @@ impl Engine {
                 "out" => self.on_deck(deck, |e| e.loop_out(deck)),
                 "halve" => self.on_deck(deck, |e| e.loop_halve(deck)),
                 "double" => self.on_deck(deck, |e| e.loop_double(deck)),
+                // beyond Swift: leave the loop, whatever made it
+                "exit" => self.on_deck(deck, |e| e.exit_loop(deck)),
                 _ => Applied::Ignored("not a loop op"),
+            },
+            // beyond Swift: the beat jump
+            A::BeatJump { deck, beats } => match self.target(deck) {
+                Target::Deck => match self.beat_jump(deck, *beats) {
+                    Ok(()) => Applied::Done,
+                    Err(_) => Applied::Ignored("no beat to jump by (no grid, or past the song)"),
+                },
+                Target::Loop => Applied::Ignored("the loop channel has no transport"),
+                Target::Nothing => Applied::Ignored("no such deck"),
             },
             A::Param { deck, name, value } => {
                 self.owners.insert(format!("{deck}.{name}"), "ui".into());

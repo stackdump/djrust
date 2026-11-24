@@ -28,8 +28,9 @@ use crate::fx::{
 };
 use crate::wave::net::WaveGraph;
 use crate::wave::{
-    read_events, roles_held, roles_held_in, EventCursor, FireEvent, LatestRing, Master, NetMacro,
-    RoleTables, TickAnchor, VoiceLaneParams, WaveOptions, WaveProject, WaveRunner,
+    read_events, roles_held, roles_held_in, EventCursor, FireEvent, LatestRing, Master,
+    NetLoopOp, NetMacro, RoleTables, TickAnchor, VoiceLaneParams, WaveOptions, WaveProject,
+    WaveRunner,
 };
 use crate::wave::{
     MacroMirror, MacroRead, MarkingBook, MarkingLayout, MarkingMirror, MarkingSnapshot,
@@ -77,6 +78,8 @@ pub enum Command {
     },
     /// Shift the beat grid by this many ticks (`WaveRunner.align`).
     Align(f64),
+    /// A net deck's loop button (beyond Swift; `WaveRunner::net_loop_op`).
+    NetLoop(NetLoopOp),
     /// A key goes down on the live voice, already scale-locked by the sender (`noteOn`; build it
     /// with [`Command::note_on`], which clamps as `Int16(clamping:)` / `UInt8(clamping:)`).
     NoteOn {
@@ -181,6 +184,10 @@ pub struct DeckMirror {
     markings: Mutex<MarkingBook>,
     /// -1: no mix-out tail.
     tail_end: AtomicI64,
+    /// The net loop's window, `(start + 1) << 32 | (end + 1)` in song steps (0: none), and the
+    /// LOOP IN mark plus one (0: none): one word each, so a reader never gets half a window.
+    net_loop: AtomicU64,
+    net_loop_in: AtomicI64,
     pub master_mask: AtomicU32,
     /// The pan / shape / aux-FX macros running aimed at this deck (bits of `AuxMacro::bit`).
     pub aux_mask: AtomicU32,
@@ -311,6 +318,16 @@ impl DeckMirror {
     pub fn tail_end_tick(&self) -> Option<i64> {
         let t = self.tail_end.load(Ordering::Relaxed);
         (t >= 0).then_some(t)
+    }
+    /// The window `(start, end)` a net deck's loop holds, in song steps (beyond Swift).
+    pub fn net_loop(&self) -> Option<(i64, i64)> {
+        let w = self.net_loop.load(Ordering::Relaxed);
+        (w != 0).then(|| ((w >> 32) as i64 - 1, (w & 0xFFFF_FFFF) as i64 - 1))
+    }
+    /// Where a net deck's LOOP IN (or its last loop) marked a start, in song steps.
+    pub fn net_loop_in(&self) -> Option<i64> {
+        let m = self.net_loop_in.load(Ordering::Relaxed);
+        (m > 0).then_some(m - 1)
     }
     /// The master chain's HP and LP corners (Hz) at the last block, and whether it was
     /// bypassed then.
@@ -841,6 +858,7 @@ impl DeckCore {
             Command::Macro { m, ticks } => self.runner.fire_macro(m, ticks),
             Command::Stinger { hash, ticks } => self.runner.fire_stinger(hash, ticks),
             Command::Align(t) => self.runner.align(t),
+            Command::NetLoop(op) => self.runner.net_loop_op(op),
             Command::NoteOn { note, velocity } => self.runner.note_on(note as i64, velocity as i64),
             Command::NoteOff { note } => self.runner.note_off(note as i64),
             Command::AllNotesOff => self.runner.all_notes_off(),
@@ -1143,6 +1161,15 @@ impl DeckCore {
         m.stopped.store(self.runner.stopped(), Ordering::Relaxed);
         m.tail_end
             .store(self.runner.tail_end_tick().unwrap_or(-1), Ordering::Relaxed);
+        let packed = |v: i64| (v + 1).clamp(1, u32::MAX as i64) as u64;
+        m.net_loop.store(
+            self.runner
+                .net_loop()
+                .map_or(0, |(s, e)| (packed(s) << 32) | packed(e)),
+            Ordering::Relaxed,
+        );
+        m.net_loop_in
+            .store(self.runner.net_loop_in().map_or(0, |s| s + 1), Ordering::Relaxed);
         m.has_project
             .store(self.runner.graph().is_some(), Ordering::Relaxed);
         m.scrubbing
