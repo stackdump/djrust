@@ -48,7 +48,7 @@
     "acoustic-guitar": "guitar.acoustic", "electric-guitar": "guitar.electric",
     "distorted-guitar": "guitar.distorted",
     "bass": "bass.electric", "808-bass": "bass.sub", "sub-bass": "bass.sub",
-    "acid": "bass.synth", "reese": "bass.synth", "fm-bass": "bass.synth", "drop-bass": "bass.synth",
+    "acid": "bass.synth", "acid-bass": "bass.synth", "reese": "bass.synth", "fm-bass": "bass.synth", "drop-bass": "bass.synth",
     "duo-bass": "bass.synth", "rubber-bass": "bass.synth", "wobble-bass": "bass.synth",
     "piano": "keys.piano", "electric-piano": "keys.epiano", "organ": "keys.organ",
     "rave-organ": "keys.organ", "clavinet": "keys.clav", "harpsichord": "keys.harpsichord",
