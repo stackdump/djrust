@@ -244,4 +244,35 @@ impl Engine {
         }
         done
     }
+
+    /// The `inserts` live op: `target` (a deck, `input:<label>`, or `master` / `Master`) with
+    /// `effect` + `on` (a switch) and / or `param` + `value` (a knob, 0..1:
+    /// `{"target":"A","param":"filter.res","value":0.4}`). The same two calls the booth's
+    /// registry makes, so a host that has only live ops (the browser's `Dj`) drives the same
+    /// chain, at the same curves.
+    pub(crate) fn live_inserts(&mut self, p: &JsonValue) -> Result<(), String> {
+        let raw = p.get("target").map(super::live_ops::text).ok_or("inserts: a target is needed")?;
+        let target = if raw.eq_ignore_ascii_case(MASTER) { MASTER.to_string() } else { raw };
+        if self.insert_slot(&target).is_none() {
+            return Err(format!("inserts: no strip {target:?}"));
+        }
+        let mut did = false;
+        if let Some(e) = p.get("effect").map(super::live_ops::text) {
+            let k = InsertKind::from_id(&e).ok_or_else(|| format!("inserts: no effect {e:?}"))?;
+            let on = super::live_ops::flag(p, "on").ok_or("inserts: an effect takes on (true or false)")?;
+            if !self.set_insert_on(&target, k, on) {
+                return Err(format!("inserts: {target} {e} was not switched (the command ring is full)"));
+            }
+            did = true;
+        }
+        if let Some(n) = p.get("param").map(super::live_ops::text) {
+            let k = InsertParam::from_id(&n).ok_or_else(|| format!("inserts: no knob {n:?}"))?;
+            let v = super::live_ops::num(p, "value").ok_or("inserts: a knob takes a value (0..1)")?;
+            if !self.set_insert_param(&target, k, v) {
+                return Err(format!("inserts: {target} {n} was not set (the command ring is full)"));
+            }
+            did = true;
+        }
+        if did { Ok(()) } else { Err("inserts: give effect + on, or param + value".into()) }
+    }
 }

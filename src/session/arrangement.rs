@@ -41,7 +41,7 @@ use crate::json::{JsonObject, JsonValue};
 pub const SCHEMA: &str = "djrust.arrangement/1";
 
 /// The socket methods an arrangement can carry as live ops ([`ArrangeOp::Live`]).
-pub const LIVE_METHODS: [&str; 21] = [
+pub const LIVE_METHODS: [&str; 22] = [
     "vocoder",
     "trick",
     "library",
@@ -63,6 +63,7 @@ pub const LIVE_METHODS: [&str; 21] = [
     "aux",
     "keys",
     "post",
+    "inserts",
 ];
 
 /// When a `swap` hands over.

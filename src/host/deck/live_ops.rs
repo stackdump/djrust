@@ -10,6 +10,7 @@
 //! | `trick` | `deck`, `kind`, `action` on / off / toggle / knob (`value`), `quant`, the kind's args (`div`, `rise`, `amount`, `bars`, `source`, `beats`, `feedback`, `res`) |
 //! | `keys` | `deck`, `note` (number or name), `velocity`, `down` (default true), `quant` (now / beat / bar): a key on the deck's live voice; or `mode` (live / transpose / td3 / toggle), `quant`, `deck_to` (A / B / aimed / next), `scale_lock`, `off` to set the route (docs/MPK.md) |
 //! | `post` | `on`, `toggle`, `preset` (a name), `chain` (stages, JSON), `step` (±1): the live post chain on the master (docs/POST.md) |
+//! | `inserts` | `target` (a deck, `input:LABEL`, `master`), `effect` + `on` (filter / crush / delay / reverb switched), `param` + `value` (a knob by id, `filter.sweep`, `filter.res`, …, 0..1): the strip's insert chain (`host::deck::inserts`) |
 //! | `library` | `action` load / play / stop, `id`: a capture-library loop onto the row, looping from the next downbeat, or stopped |
 //!
 //! Each is one match arm: a new method is a name in `LIVE_METHODS` and an arm here.
@@ -107,6 +108,7 @@ impl Engine {
             "autonext" => self.live_autonext(p),
             "transport" => self.live_transport(p),
             "target" => self.live_target(p),
+            "inserts" => self.live_inserts(p),
             o => Err(format!("no live op {o:?}")),
         }
     }
