@@ -78,6 +78,63 @@ impl Shrink for Bundle {
     }
 }
 
+/// A JSON document freed a few nodes at a time: a container's children go on the stack (its keys
+/// freed as they are taken off), a scalar is freed; about [`SHRINK`] nodes a step.
+struct Json(Vec<JsonValue>);
+
+impl Shrink for Json {
+    fn shrink(&mut self) -> bool {
+        let mut done = 0;
+        while done < SHRINK {
+            let Some(v) = self.0.pop() else { break };
+            done += 1;
+            match v {
+                JsonValue::Array(a) => {
+                    done += a.len() / 8;
+                    self.0.extend(a);
+                }
+                JsonValue::Object(o) => {
+                    let entries = o.into_entries();
+                    done += entries.len();
+                    self.0.extend(entries.into_iter().map(|(_, x)| x));
+                }
+                _ => {}
+            }
+        }
+        if self.0.is_empty() {
+            self.0 = Vec::new();
+            return true;
+        }
+        false
+    }
+}
+
+/// A project freed a net at a time, the net [`SHRINK`] entries a step ([`Bundle`]).
+struct ProjectNets {
+    project: Option<Project>,
+    net: Bundle,
+}
+
+impl Shrink for ProjectNets {
+    fn shrink(&mut self) -> bool {
+        if self.net.0.is_some() {
+            self.net.shrink();
+            return false;
+        }
+        let Some(p) = self.project.as_mut() else { return true };
+        match p.nets.pop_last() {
+            Some((_, n)) => {
+                self.net = Bundle(Some(n));
+                false
+            }
+            None => {
+                self.project = None;
+                true
+            }
+        }
+    }
+}
+
 struct Piece {
     name: &'static str,
     thing: Box<dyn Shrink>,
@@ -140,62 +197,16 @@ impl Pieces {
         self.push_project(project);
     }
 
-    /// A project, as its nets and itself.
-    pub fn push_project(&mut self, mut p: Project) {
-        let keys: Vec<String> = p.nets.keys().to_vec();
-        let nets: Vec<NetBundle> = keys.iter().rev().filter_map(|k| p.nets.remove(k)).collect();
-        self.push(p);
-        for n in nets {
-            self.push_bundle(n);
-        }
+    /// A project: taken whole, it frees its nets one at a time (each [`SHRINK`] entries a
+    /// step), then itself.
+    pub fn push_project(&mut self, p: Project) {
+        self.push_shrink("Project", ProjectNets { project: Some(p), net: Bundle(None) });
     }
 
-    /// A JSON document (a raw-`nets` share's payload: tens of thousands of nodes), as pieces of
-    /// about [`SHRINK`] nodes: a big container's children go in batches (small ones together,
-    /// big ones split again), its keys after them.
+    /// A JSON document (a raw-`nets` share's payload: tens of thousands of nodes): taken whole
+    /// (nothing walked or moved here), it frees about [`SHRINK`] nodes a step.
     pub fn push_json(&mut self, v: JsonValue) {
-        let mut batch = (Vec::new(), 0usize);
-        self.json_into(v, &mut batch);
-        self.flush_json(&mut batch);
-    }
-
-    fn json_into(&mut self, v: JsonValue, batch: &mut (Vec<JsonValue>, usize)) {
-        let n = json_nodes(&v);
-        if n <= SHRINK {
-            if batch.1 + n > SHRINK {
-                self.flush_json(batch);
-            }
-            batch.0.push(v);
-            batch.1 += n;
-            return;
-        }
-        match v {
-            JsonValue::Array(a) => {
-                for x in a {
-                    self.json_into(x, batch);
-                }
-            }
-            JsonValue::Object(o) => {
-                let mut keys = Vec::new();
-                let mut values = Vec::new();
-                for (k, x) in o.into_entries() {
-                    keys.push(k);
-                    values.push(x);
-                }
-                self.push_strings(keys);
-                for x in values {
-                    self.json_into(x, batch);
-                }
-            }
-            v => batch.0.push(v),
-        }
-    }
-
-    fn flush_json(&mut self, batch: &mut (Vec<JsonValue>, usize)) {
-        if !batch.0.is_empty() {
-            self.push_shrink("json", Whole(Some(std::mem::take(&mut batch.0))));
-        }
-        batch.1 = 0;
+        self.push_shrink("json", Json(vec![v]));
     }
 
     /// Free up to `n` pieces' worth (a step of each). True once everything is freed.
@@ -228,14 +239,6 @@ impl Pieces {
     }
 }
 
-/// Nodes in `v` (itself, and everything under it).
-fn json_nodes(v: &JsonValue) -> usize {
-    match v {
-        JsonValue::Array(a) => 1 + a.iter().map(json_nodes).sum::<usize>(),
-        JsonValue::Object(o) => 1 + o.iter().map(|(_, v)| json_nodes(v)).sum::<usize>(),
-        _ => 1,
-    }
-}
 
 pub struct Teardown {
     /// Freed from the end: the pieces first, the engine and its renderer last.

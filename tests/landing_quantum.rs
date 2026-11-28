@@ -63,8 +63,9 @@ const BUDGET: usize = 12 << 10;
 /// The most allocator calls any one quantum's `install_step` or `tick` may make: about 0.1-0.2 ms
 /// natively, ~1 ms in the browser on a slow core. At 2aeffaf (the landing freeing and copying
 /// at once) the quantum a track landed in over another made up to ~153 thousand calls (10 ms
-/// native) and the `tick` after it up to ~199 thousand; now a landing makes ~350, a tick ~850 and
-/// a quantum freeing what a landing replaced ~1.1 thousand.
+/// native) and the `tick` after it up to ~199 thousand. Now (gir, 2026-11-28) a section's landing
+/// makes ~330 (a DJ compose's ~690), a tick ~100 (~500), and a quantum freeing what a landing
+/// replaced ~1.4 thousand at most (two pieces of a net's places or transitions).
 const MOST_CALLS: u64 = 2_000;
 
 /// The most a quantum taking a genre track's frames in may make. A frame is one compiled net or

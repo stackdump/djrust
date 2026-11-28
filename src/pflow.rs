@@ -75,6 +75,12 @@ impl<V> OrderedMap<V> {
             }
         }
     }
+    /// The last entry, taken out (in insertion order).
+    pub fn pop_last(&mut self) -> Option<(String, V)> {
+        let k = self.keys.pop()?;
+        let v = self.storage.remove(&k)?;
+        Some((k, v))
+    }
     /// Free up to `n` entries, the last first (a map freed a few entries at a time). True once
     /// it is empty.
     pub fn free_some(&mut self, n: usize) -> bool {
