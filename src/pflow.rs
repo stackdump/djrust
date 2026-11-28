@@ -75,6 +75,18 @@ impl<V> OrderedMap<V> {
             }
         }
     }
+    /// Free up to `n` entries, the last first (a map freed a few entries at a time). True once
+    /// it is empty.
+    pub fn free_some(&mut self, n: usize) -> bool {
+        for _ in 0..n {
+            let Some(k) = self.keys.pop() else { break };
+            self.storage.remove(&k);
+        }
+        if self.keys.is_empty() {
+            self.storage.clear();
+        }
+        self.keys.is_empty()
+    }
     pub fn remove(&mut self, key: &str) -> Option<V> {
         let v = self.storage.remove(key)?;
         self.keys.retain(|k| k != key);

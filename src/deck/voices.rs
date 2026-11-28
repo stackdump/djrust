@@ -123,6 +123,50 @@ impl RoleVoice {
     }
 }
 
+/// A track's source, borrowed (`DeckSource::Net` / `RawNets`): what
+/// [`keeps_voice_settings_of`] compares.
+#[derive(Clone, Copy)]
+pub enum SongRef<'a> {
+    Spec(&'a crate::TrackSpec),
+    Raw(&'a JsonValue),
+}
+
+/// [`keeps_voice_settings`] of the sources `now` and `loading`, borrowed: a raw-`nets` share
+/// (tens of thousands of JSON nodes, which copying and writing out to compare cost the audio
+/// thread milliseconds) is compared in place.
+pub fn keeps_voice_settings_of(now: SongRef<'_>, loading: SongRef<'_>) -> bool {
+    match (now, loading) {
+        (SongRef::Raw(a), SongRef::Raw(b)) => keeps_voice_settings_raw(a, b),
+        // (specs are small: as `keeps_voice_settings` compares them)
+        (SongRef::Spec(a), SongRef::Spec(b)) => keeps_voice_settings(Some(&DeckSource::Net(a.clone())), &DeckSource::Net(b.clone())),
+        // a spec and a share are never the same source; their songs (without `tracks`) compare
+        // as canonical JSON
+        (SongRef::Spec(spec), SongRef::Raw(p)) | (SongRef::Raw(p), SongRef::Spec(spec)) => {
+            let mut spec = spec.clone();
+            spec.layers.remove("tracks");
+            let song = spec.payload();
+            match (song.as_object(), p.as_object()) {
+                (Some(a), Some(b)) => a.canonical_eq_without(b, Some("tracks")),
+                _ => false,
+            }
+        }
+    }
+}
+
+/// [`keeps_voice_settings`] of a raw-`nets` share over another (a BeatScript section landing
+/// over the last one), compared in place.
+pub fn keeps_voice_settings_raw(now: &JsonValue, loading: &JsonValue) -> bool {
+    // `now == loading` (DeckSource's: equal, or the same canonical JSON)
+    if now.canonical_eq(loading) {
+        return false;
+    }
+    // the song without its `tracks` override, as canonical JSON
+    match (now.as_object(), loading.as_object()) {
+        (Some(a), Some(b)) => a.canonical_eq_without(b, Some("tracks")),
+        _ => false,
+    }
+}
+
 /// `Deck.keepsVoiceSettings(loading:)`: does loading `loading` keep the voice settings of the
 /// deck that plays `now`? Only when it is the song playing with another instrument picked (the
 /// same share but for its `tracks` override): the settings belong to the song, and to the
@@ -130,6 +174,16 @@ impl RoleVoice {
 /// `WaveDeckSource.load`). A new song, a favorite or the same song loaded again start from the
 /// instruments' own voices. `now` is `Deck.netSource`: None off a net.
 pub fn keeps_voice_settings(now: Option<&DeckSource>, loading: &DeckSource) -> bool {
+    match (now, loading) {
+        (Some(DeckSource::RawNets(now)), DeckSource::RawNets(loading)) => return keeps_voice_settings_raw(now, loading),
+        (Some(DeckSource::Net(now)), DeckSource::RawNets(loading)) => {
+            return keeps_voice_settings_of(SongRef::Spec(now), SongRef::Raw(loading));
+        }
+        (Some(DeckSource::RawNets(now)), DeckSource::Net(loading)) => {
+            return keeps_voice_settings_of(SongRef::Raw(now), SongRef::Spec(loading));
+        }
+        _ => {}
+    }
     /// The song without its `tracks` override: its payload, None for a source that is no song.
     fn song(d: &DeckSource) -> Option<JsonValue> {
         match d {
@@ -153,5 +207,131 @@ pub fn keeps_voice_settings(now: Option<&DeckSource>, loading: &DeckSource) -> b
     match (song(now), song(loading)) {
         (Some(a), Some(b)) => a.canonical_js() == b.canonical_js(),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod keeps_voice_settings_tests {
+    use super::*;
+    use crate::json::JsonObject;
+
+    /// What `keeps_voice_settings` answered for two raw-`nets` shares before it compared them in
+    /// place: by copies written out as canonical JSON.
+    fn by_strings(now: &JsonValue, loading: &JsonValue) -> bool {
+        fn song(p: &JsonValue) -> Option<JsonValue> {
+            let mut o = p.as_object()?.clone();
+            o.remove("tracks");
+            Some(JsonValue::Object(o))
+        }
+        if now == loading || now.canonical_js() == loading.canonical_js() {
+            return false;
+        }
+        match (song(now), song(loading)) {
+            (Some(a), Some(b)) => a.canonical_js() == b.canonical_js(),
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn in_place_answers_as_the_canonical_strings_did() {
+        let j = |t: &str| JsonValue::parse(t).unwrap();
+        let base = r#"{"genre":"techno","seed":42,"nets":{"a":{"places":[1,2.5,-3],"x":"s"},"b":[true,null,{"k":0}]},"tracks":{"bass":"acid"}}"#;
+        let docs = [
+            base,
+            // the same, keys in another order (equal canonically)
+            r#"{"tracks":{"bass":"acid"},"seed":42,"nets":{"b":[true,null,{"k":0}],"a":{"x":"s","places":[1,2.5,-3]}},"genre":"techno"}"#,
+            // another instrument picked: keeps the settings
+            r#"{"genre":"techno","seed":42,"nets":{"a":{"places":[1,2.5,-3],"x":"s"},"b":[true,null,{"k":0}]},"tracks":{"bass":"sub"}}"#,
+            // no tracks override at all
+            r#"{"genre":"techno","seed":42,"nets":{"a":{"places":[1,2.5,-3],"x":"s"},"b":[true,null,{"k":0}]}}"#,
+            // another song
+            r#"{"genre":"techno","seed":43,"nets":{"a":{"places":[1,2.5,-3],"x":"s"},"b":[true,null,{"k":0}]},"tracks":{"bass":"sub"}}"#,
+            r#"{"genre":"techno","seed":42,"nets":{"a":{"places":[1,2.5,-3,4],"x":"s"},"b":[true,null,{"k":0}]},"tracks":{"bass":"sub"}}"#,
+            r#"{"genre":"techno","seed":42,"nets":{"a":{"places":[1,2.5,-3],"x":"t"},"b":[true,null,{"k":0}]},"tracks":{"bass":"sub"}}"#,
+            r#"{"genre":"techno","seed":42,"nets":{"a":{"places":[1,2.5,-3],"x":"s"},"b":[true,false,{"k":0}]},"tracks":{"bass":"sub"}}"#,
+            r#"{"genre":"techno","seed":42,"nets":{"a":{"places":[1,2.5,-3],"x":"s"},"b":[true,null,{"k":0,"l":1}]}}"#,
+            r#"{"genre":"techno","seed":42,"extra":1,"nets":{"a":{"places":[1,2.5,-3],"x":"s"},"b":[true,null,{"k":0}]}}"#,
+            r#"[1,2]"#,
+            r#""techno""#,
+        ];
+        let mut values: Vec<JsonValue> = docs.iter().map(|t| j(t)).collect();
+        // numbers as canonical_js writes them: -0 is 0, a number that is not finite is null
+        let mut zero = JsonObject::new();
+        zero.set("k", JsonValue::Number(-0.0));
+        zero.set("n", JsonValue::Number(f64::NAN));
+        let mut zero2 = JsonObject::new();
+        zero2.set("n", JsonValue::Null);
+        zero2.set("k", JsonValue::Number(0.0));
+        let mut zero3 = zero2.clone();
+        zero3.set("tracks", JsonValue::Number(f64::INFINITY));
+        values.extend([JsonValue::Object(zero), JsonValue::Object(zero2), JsonValue::Object(zero3)]);
+        let mut kept = 0;
+        for a in &values {
+            for b in &values {
+                assert_eq!(a.canonical_eq(b), a.canonical_js() == b.canonical_js(), "{} / {}", a.canonical_js(), b.canonical_js());
+                let want = by_strings(a, b);
+                assert_eq!(keeps_voice_settings_raw(a, b), want, "{} over {}", b.canonical_js(), a.canonical_js());
+                assert_eq!(
+                    keeps_voice_settings(Some(&DeckSource::RawNets(a.clone())), &DeckSource::RawNets(b.clone())),
+                    want
+                );
+                kept += want as usize;
+            }
+        }
+        assert!(kept >= 6, "{kept}");
+    }
+
+    /// The reference answer for any two sources: copies written out as canonical JSON.
+    fn by_strings_any(now: &DeckSource, loading: &DeckSource) -> bool {
+        fn song(d: &DeckSource) -> Option<JsonValue> {
+            match d {
+                DeckSource::Net(spec) => {
+                    let mut spec = spec.clone();
+                    spec.layers.remove("tracks");
+                    Some(spec.payload())
+                }
+                DeckSource::RawNets(payload) => {
+                    let mut o = payload.as_object()?.clone();
+                    o.remove("tracks");
+                    Some(JsonValue::Object(o))
+                }
+                _ => None,
+            }
+        }
+        if now == loading {
+            return false;
+        }
+        match (song(now), song(loading)) {
+            (Some(a), Some(b)) => a.canonical_js() == b.canonical_js(),
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn a_spec_and_a_share_answer_as_the_canonical_strings_did() {
+        let spec = crate::TrackSpec::parse("techno:42:standard").unwrap();
+        let mut other = spec.clone();
+        other.layers.set("tracks", JsonValue::parse(r#"{"bass":"acid"}"#).unwrap());
+        let same_song = spec.payload();
+        let mut with_tracks = same_song.as_object().unwrap().clone();
+        with_tracks.set("tracks", JsonValue::parse(r#"{"bass":"sub"}"#).unwrap());
+        let another = crate::TrackSpec::parse("techno:43:standard").unwrap().payload();
+        let sources = [
+            DeckSource::Net(spec.clone()),
+            DeckSource::Net(other),
+            DeckSource::RawNets(same_song),
+            DeckSource::RawNets(JsonValue::Object(with_tracks)),
+            DeckSource::RawNets(another),
+            DeckSource::RawNets(JsonValue::parse("[1]").unwrap()),
+        ];
+        let mut kept = 0;
+        for a in &sources {
+            for b in &sources {
+                let want = by_strings_any(a, b);
+                assert_eq!(keeps_voice_settings(Some(a), b), want, "{:?} over {:?}", b, a);
+                kept += want as usize;
+            }
+        }
+        assert!(kept >= 4, "{kept}");
     }
 }

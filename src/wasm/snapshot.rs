@@ -219,7 +219,7 @@ pub fn stand_prepared(
         let mut ctx = PerformCtx::default();
         if let Some(i) = tracks.iter().position(|(d, _)| d == name) {
             let (_, t) = tracks.swap_remove(i);
-            if crate::wasm::install::deck_source(&t.source) == *source {
+            if t.source.is(source) {
                 ctx.prepared = Some(t);
             }
         }

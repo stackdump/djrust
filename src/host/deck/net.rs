@@ -188,12 +188,22 @@ impl Engine {
     /// hand-over). A new song, a favorite or the same song loaded again start from the
     /// instruments' own voices.
     pub(crate) fn keeps_voice_settings(&self, deck: &str, source: &TrackSource) -> bool {
-        let loading = match source {
-            TrackSource::Net(s) => DeckSource::Net(s.clone()),
-            TrackSource::RawNets(p) => DeckSource::RawNets(p.clone()),
+        use crate::deck::voices::{keeps_voice_settings_of, SongRef};
+        // (`Deck.netSource`: none off a net, or on a net deck with nothing loaded); both
+        // borrowed: a raw-nets share (a BeatScript section) is compared in place, nothing copied
+        let Some(d) = self.deck(deck).filter(|d| d.is_net()) else {
+            return false;
         };
-        let now = self.deck(deck).and_then(MainDeck::net_source);
-        crate::deck::voices::keeps_voice_settings(now.as_ref(), &loading)
+        let now = match (&d.spec, d.track.raw_nets.as_ref()) {
+            (Some(spec), _) => SongRef::Spec(spec),
+            (None, Some(p)) => SongRef::Raw(p),
+            (None, None) => return false,
+        };
+        let loading = match source {
+            TrackSource::Net(s) => SongRef::Spec(s),
+            TrackSource::RawNets(p) => SongRef::Raw(p),
+        };
+        keeps_voice_settings_of(now, loading)
     }
 
     // MARK: kit, palette, role voice

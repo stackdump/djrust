@@ -44,6 +44,23 @@ impl JsonObject {
         self.index.get(key).map(|&i| &self.entries[i].1)
     }
 
+    /// [`JsonValue::canonical_eq`] of the two objects, `without` (a key) left out of both: what
+    /// comparing their `canonical_js` with that key removed from each answers.
+    pub fn canonical_eq_without(&self, other: &JsonObject, without: Option<&str>) -> bool {
+        let count = |o: &JsonObject| o.entries.len() - without.is_some_and(|k| o.index.contains_key(k)) as usize;
+        count(self) == count(other)
+            && self
+                .entries
+                .iter()
+                .filter(|(k, _)| Some(k.as_str()) != without)
+                .all(|(k, v)| other.get(k).is_some_and(|w| v.canonical_eq(w)))
+    }
+
+    /// The entries, in order, taken out (the key index let go of).
+    pub fn into_entries(self) -> Vec<(String, JsonValue)> {
+        self.entries
+    }
+
     pub fn get_mut(&mut self, key: &str) -> Option<&mut JsonValue> {
         let i = *self.index.get(key)?;
         Some(&mut self.entries[i].1)
@@ -348,6 +365,27 @@ impl JsonValue {
         let mut out = String::new();
         self.write(&mut out, Style::Insertion);
         out
+    }
+
+    /// `self.canonical_js() == other.canonical_js()`, compared in place: nothing is written or
+    /// allocated (unless two finite numbers differ, which are then compared as `canonical_js`
+    /// prints them), and it stops at the first difference. Keys in any order; a number that is
+    /// not finite is `null`, as `canonical_js` writes it.
+    pub fn canonical_eq(&self, other: &JsonValue) -> bool {
+        use JsonValue::*;
+        match (self, other) {
+            (Number(x), Number(y)) => match (x.is_finite(), y.is_finite()) {
+                (true, true) => x == y || js_number_string(*x) == js_number_string(*y),
+                (a, b) => a == b,
+            },
+            (Number(x), Null) | (Null, Number(x)) => !x.is_finite(),
+            (Null, Null) => true,
+            (Bool(x), Bool(y)) => x == y,
+            (String(x), String(y)) => x == y,
+            (Array(x), Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(a, b)| a.canonical_eq(b)),
+            (Object(x), Object(y)) => x.canonical_eq_without(y, None),
+            _ => false,
+        }
     }
 
     /// `canonicalizeJSON` (share/codec.js): sorted keys, plain JSON.stringify strings.

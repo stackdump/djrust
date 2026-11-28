@@ -1753,6 +1753,12 @@ impl WaveProject {
         core::mem::take(&mut self.lanes)
     }
 
+    /// Give back the sampler slot references its lanes hold now, as dropping it would: a project
+    /// freed later, a piece at a time, holds no slot meanwhile.
+    pub fn release_slots(&mut self) {
+        drop(core::mem::take(&mut self.held));
+    }
+
     /// The bank this project's sampled lanes bound their slots in, set when a host binds lanes
     /// without [`WaveOptions::bank`] (by [`SampleBinder`], which has no handle to release
     /// through): the project gives the references back to it when it drops. One it has already

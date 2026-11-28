@@ -34,9 +34,7 @@ pub const NO_SAMPLER: &str = "this build has no SoundFont sampler (rebuild with 
 pub(crate) fn layers_of(source: &TrackSource) -> (Vec<LayerEntry>, Option<String>) {
     match source {
         TrackSource::Net(_) => (Vec::new(), None),
-        TrackSource::RawNets(payload) => {
-            crate::layers::reset_layers(&DeckSource::RawNets(payload.clone()))
-        }
+        TrackSource::RawNets(payload) => crate::layers::reset_layers_of(payload),
     }
 }
 

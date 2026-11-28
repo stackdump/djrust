@@ -55,6 +55,10 @@ fn deck_ix(deck: &str) -> usize {
 /// an engine of two playing decks (~600 pieces) in ~150 quanta (0.4 s).
 const RETIRE_PIECES: usize = 4;
 
+/// Pieces of what the engine let go of (the track a landing replaced) freed per render
+/// quantum ([`Engine::free_step`]): the same pieces as a swapped-out engine's.
+const FREE_PIECES: usize = 2;
+
 /// An offloaded compose's id, ahead of its bytes (u64 LE): the request and its answer carry it.
 fn with_id(id: u64, bytes: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(8 + bytes.len());
@@ -133,8 +137,11 @@ impl Dj {
     pub fn new(sample_rate: f64) -> Dj {
         std::panic::set_hook(Box::new(|_| {}));
         let before = install::memory_bytes();
-        let (engine, renderer) = boot(sample_rate);
+        let (mut engine, renderer) = boot(sample_rate);
         let engine_bytes = install::memory_bytes() - before;
+        // the worklet's thread is the engine's only one: a track that lands frees the one it
+        // replaces a few pieces a quantum (install_step), not in the quantum it lands in
+        engine.set_free_in_pieces(true);
         Dj { engine, renderer, sample_rate, installer: install::Installer::default(), offload: false, retiring: Vec::new(), engine_bytes, events: Default::default() }
     }
 
@@ -209,8 +216,10 @@ impl Dj {
         self.installer.cancel(deck);
     }
 
+    /// Anything to do in [`install_step`](Self::install_step): a track or a restore installing, an
+    /// offloaded compose coming in, or what was let go of still to free.
     pub fn installing(&self) -> bool {
-        self.installer.busy() || self.engine.offload_busy() || !self.retiring.is_empty()
+        self.installer.busy() || self.engine.offload_busy() || !self.retiring.is_empty() || self.engine.freeing() > 0
     }
 
     /// Swap in a restored engine between two quanta (same thread as `render()`), the old one
@@ -218,8 +227,10 @@ impl Dj {
     fn swap_in(&mut self, engine: Engine, renderer: Renderer) {
         let old = (std::mem::replace(&mut self.engine, engine), std::mem::replace(&mut self.renderer, renderer));
         self.retiring.push(crate::host::deck::teardown::Teardown::new(old.0, old.1));
-        // (stood deterministic: the restored engine offloads from here as this one did)
+        // (stood deterministic: the restored engine offloads from here as this one did, and
+        // frees in pieces as this one did)
         self.engine.set_offload(self.offload);
+        self.engine.set_free_in_pieces(true);
     }
 
     /// About `budget` bytes of the oldest install (a restore first): call once per render
@@ -228,13 +239,19 @@ impl Dj {
     /// track inline), `{"restore":{"cid","refused"}}` (the restored session is in) or
     /// `{"offload":{"id","kb","steps","error"}}` (an offloaded compose is in: the deck lands it
     /// on its next tick; `error` null unless it failed). A host's own install goes first.
+    /// Quanta with nothing to install free what was let go of, a few pieces each.
     pub fn install_step(&mut self, budget: usize) -> Option<String> {
-        // a swapped-out engine is freed on quanta with nothing else to install
+        // a swapped-out engine, then the tracks landings replaced, are freed on quanta with
+        // nothing else to install
         if !self.installer.busy() && !self.engine.offload_busy() {
             if let Some(t) = self.retiring.first_mut() {
                 if t.step(RETIRE_PIECES) {
                     self.retiring.remove(0);
                 }
+                return None;
+            }
+            if self.engine.freeing() > 0 {
+                self.engine.free_step(FREE_PIECES);
                 return None;
             }
         }

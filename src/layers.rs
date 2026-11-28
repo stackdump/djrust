@@ -440,18 +440,21 @@ pub fn pool(library: &[StockLoop], bpm: f64, key: Option<&str>, limit: usize) ->
 pub fn reset_layers(source: &crate::session::model::DeckSource) -> (Vec<LayerEntry>, Option<String>) {
     use crate::session::model::DeckSource;
     match source {
-        DeckSource::RawNets(payload) => {
-            let specs = parse(payload.get(ENVELOPE_KEY)).unwrap_or_default();
-            (
-                entries(&specs),
-                payload
-                    .get("djKey")
-                    .and_then(JsonValue::as_str)
-                    .map(String::from),
-            )
-        }
+        DeckSource::RawNets(payload) => reset_layers_of(payload),
         DeckSource::Net(_) | DeckSource::None | DeckSource::Sample { .. } => (Vec::new(), None),
     }
+}
+
+/// [`reset_layers`] of a raw-`nets` share's payload (read in place).
+pub fn reset_layers_of(payload: &JsonValue) -> (Vec<LayerEntry>, Option<String>) {
+    let specs = parse(payload.get(ENVELOPE_KEY)).unwrap_or_default();
+    (
+        entries(&specs),
+        payload
+            .get("djKey")
+            .and_then(JsonValue::as_str)
+            .map(String::from),
+    )
 }
 
 /// `Deck.layerKey`: the key to pick layers in: the track's own (`djKey`, `key_name`), else a

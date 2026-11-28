@@ -477,6 +477,27 @@ pub enum TrackSource {
     RawNets(JsonValue),
 }
 
+impl TrackSource {
+    /// What a deck loads it as (`.load(deck, source)`): a copy (of a raw-`nets` share's whole
+    /// payload, too).
+    pub fn deck_source(&self) -> DeckSource {
+        match self {
+            TrackSource::Net(spec) => DeckSource::Net(spec.clone()),
+            TrackSource::RawNets(p) => DeckSource::RawNets(p.clone()),
+        }
+    }
+
+    /// Is `d` equal to what [`deck_source`](Self::deck_source) would make (as `DeckSource`
+    /// compares: raw-`nets` payloads by their canonical JSON), with nothing copied?
+    pub fn is(&self, d: &DeckSource) -> bool {
+        match (self, d) {
+            (TrackSource::Net(a), DeckSource::Net(b)) => a == b,
+            (TrackSource::RawNets(p), DeckSource::RawNets(q)) => p == q || p.canonical_js() == q.canonical_js(),
+            _ => false,
+        }
+    }
+}
+
 /// A track composed (or, for a raw-`nets` share, built) and compiled off the audio thread,
 /// ready to hand to a deck (`PreparedTrack`).
 pub struct PreparedTrack {
@@ -969,21 +990,26 @@ impl Engine {
         let d = &mut self.decks[i];
         // a new track: its layer list is its own `loopLayers`, else empty (`resetLayers(from:)`)
         let (layers, layer_key) = super::moves::layers_of(&source);
-        d.walk.layer_entries = layers;
+        let old_layers = std::mem::replace(&mut d.walk.layer_entries, layers);
         d.walk.layer_key_name = layer_key;
         d.walk.layer_epoch += 1;
-        match source {
+        let old = match source {
             TrackSource::Net(spec) => {
                 d.seed = spec.seed;
-                d.spec = Some(spec);
-                d.track.raw_nets = None;
+                (d.spec.replace(spec), d.track.raw_nets.take())
             }
             TrackSource::RawNets(payload) => {
                 d.seed = DeckSource::voicing_seed(&payload);
-                d.spec = None;
-                d.track.raw_nets = Some(payload);
+                (d.spec.take(), d.track.raw_nets.replace(payload))
             }
+        };
+        // (the spec or share the deck had loaded: freed in pieces if the engine does)
+        let (old_spec, old_share) = old;
+        if let Some(share) = old_share {
+            self.let_go_json(share);
         }
+        self.let_go((old_spec, old_layers));
+        let d = &mut self.decks[i];
         d.track.fixes = Some(fixes);
         d.track.pass_applied = pass_applied;
         d.track.seed_target = None;

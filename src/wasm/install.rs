@@ -12,10 +12,8 @@
 use std::collections::VecDeque;
 use std::ops::Range;
 
-use crate::session::action::DeckAction;
 use crate::session::model::DeckSource;
 use crate::host::deck::engine::{Engine, Renderer};
-use crate::host::deck::perform::PerformCtx;
 use crate::host::deck::track::{PreparedTrack, TrackSource};
 use crate::host::deck::transfer::{Install, PreparedInstall};
 
@@ -100,10 +98,7 @@ pub struct Installer {
 }
 
 pub fn deck_source(t: &TrackSource) -> DeckSource {
-    match t {
-        TrackSource::Net(spec) => DeckSource::Net(spec.clone()),
-        TrackSource::RawNets(p) => DeckSource::RawNets(p.clone()),
-    }
+    t.deck_source()
 }
 
 impl Installer {
@@ -187,7 +182,7 @@ impl Installer {
                 }
                 let wanted = job.checked.decks.iter().find(|d| d.0 == name).map(|d| &d.1);
                 if let Some(i) = engine.preparer(&name).and_then(|p| Install::new(bytes, &p).ok()) {
-                    if wanted == Some(&deck_source(i.source())) {
+                    if wanted.is_some_and(|w| i.source().is(w)) {
                         job.installs.push_back((name, i));
                     }
                 }
@@ -227,15 +222,13 @@ impl Installer {
             Ok(false) => None,
             Ok(true) => {
                 let Pending { deck, install, steps } = self.pending.pop_front().unwrap();
-                let source = deck_source(install.source());
                 let bytes = install.len();
                 let finished = e.preparer(&deck).ok_or_else(|| "closed".to_string()).and_then(|pr| install.finish(&pr).map_err(|x| x.to_string()));
                 Some(match finished {
                     Ok(track) => {
-                        let a = e.perform(
-                            &DeckAction::Load { deck: deck.clone(), source },
-                            PerformCtx { prepared: Some(track), ..Default::default() },
-                        );
+                        // (`perform(.load, prepared:)`, without copying the track's source:
+                        // what it replaces is freed a piece at a time, `Engine::free_step`)
+                        let a = e.perform_load_prepared(&deck, track);
                         Landed::Track { deck, answer: format!("{a:?}"), bytes, steps }
                     }
                     Err(error) => Landed::Failed { deck, error },

@@ -1012,6 +1012,9 @@ pub struct Engine {
     pub(crate) surface_traced: usize,
     /// Projects freed off the render thread.
     pub retired: u64,
+    /// What this engine lets go of, kept to free a few pieces at a time (`free_step`) when it
+    /// frees in pieces ([`set_free_in_pieces`](Engine::set_free_in_pieces)); None frees it at once.
+    free_later: Option<super::teardown::Pieces>,
     pub(crate) jogs: Vec<super::surface::JogShim>,
     master_level: Arc<AtomicU32>,
     /// The loop row and channel (`LoopRecorder.swift`).
@@ -1302,6 +1305,7 @@ pub fn engine(config: EngineConfig) -> (Engine, Renderer) {
         trace: None,
         trace_via: String::new(),
         retired: 0,
+        free_later: None,
         jogs: Vec::new(),
         master_level,
         loops: LoopRow::new(loop_mirror),
@@ -1383,12 +1387,18 @@ impl Engine {
         }
     }
 
-    /// Free projects the render thread has let go of (`drainRetired`).
+    /// Free projects the render thread has let go of (`drainRetired`): at once, or kept for
+    /// [`free_step`](Self::free_step) when this engine frees in pieces.
     pub fn drain_retired(&mut self) {
         while let Ok(p) = self.retire_rx.pop() {
             self.retired += 1;
-            drop(p);
+            match self.free_later.as_mut() {
+                Some(f) => f.push_wave(p),
+                None => drop(p),
+            }
         }
+        // (a sample buffer, a post chain, a sampler: a few big allocations, cheap to free, and
+        // what holds a buffer is how the library knows it is in use: freed at once either way)
         while let Ok(b) = self.retire_buffers_rx.pop() {
             self.retired += 1;
             drop(b);
@@ -1401,6 +1411,68 @@ impl Engine {
         while let Ok(x) = self.retire_samplers_rx.pop() {
             self.retired += 1;
             drop(x);
+        }
+    }
+
+    /// Free the tracks this engine lets go of a few pieces at a time instead of at once: for a
+    /// host whose audio thread is the only thread the engine has (djweb's worklet), where the
+    /// quantum a track lands in would otherwise also free the track it replaced (the compiled
+    /// project the render thread retired, the project the deck played, the share it was loaded
+    /// from: milliseconds of frees). Sampler slots a retired project held are given back at once.
+    /// The host calls [`free_step`](Self::free_step) on its quanta while
+    /// [`freeing`](Self::freeing). Nothing that plays changes: only when memory is freed. Off
+    /// (the default), everything is freed as it is let go of; switching it off frees what waits.
+    pub fn set_free_in_pieces(&mut self, on: bool) {
+        if on {
+            self.free_later.get_or_insert_with(Default::default);
+        } else {
+            self.free_later = None;
+        }
+    }
+
+    /// Free up to `n` of the pieces waiting ([`set_free_in_pieces`](Self::set_free_in_pieces)).
+    /// True once none wait.
+    pub fn free_step(&mut self, n: usize) -> bool {
+        self.free_later.as_mut().map_or(true, |f| f.step(n))
+    }
+
+    /// The pieces waiting to be freed, taken (a [`Teardown`](super::teardown::Teardown) of this
+    /// engine frees them in pieces too).
+    pub(crate) fn take_free_later(&mut self) -> Option<super::teardown::Pieces> {
+        self.free_later.take()
+    }
+
+    /// What the next piece [`free_step`](Self::free_step) frees is (a type name, for a profile).
+    pub fn next_free_name(&self) -> Option<&'static str> {
+        self.free_later.as_ref().and_then(|f| f.next_name())
+    }
+
+    /// Pieces waiting to be freed.
+    pub fn freeing(&self) -> usize {
+        self.free_later.as_ref().map_or(0, |f| f.len())
+    }
+
+    /// `x`, let go of: freed now, or a piece to free later.
+    pub(crate) fn let_go<T: std::any::Any>(&mut self, x: T) {
+        match self.free_later.as_mut() {
+            Some(f) => f.push(x),
+            None => drop(x),
+        }
+    }
+
+    /// A JSON document the engine lets go of (a raw-`nets` share): freed now, or as pieces.
+    pub(crate) fn let_go_json(&mut self, v: crate::json::JsonValue) {
+        match self.free_later.as_mut() {
+            Some(f) => f.push_json(v),
+            None => drop(v),
+        }
+    }
+
+    /// A project the engine lets go of: freed now, or its nets and itself as pieces.
+    pub(crate) fn let_go_project(&mut self, p: Project) {
+        match self.free_later.as_mut() {
+            Some(f) => f.push_project(p),
+            None => drop(p),
         }
     }
 
@@ -1504,11 +1576,19 @@ impl Engine {
             // the project's marking mirror and layout are kept for the readers (`remember`)
             self.decks[i].mirror.remember_marking(marking);
             let d = &mut self.decks[i];
-            d.project = Some(p.source);
-            d.roles = p.roles;
-            d.ring_roles = p.ring_roles;
-            d.sections = p.sections;
-            d.track.latest = Some(p.latest);
+            let old = d.project.replace(p.source);
+            let old_parts = (
+                std::mem::replace(&mut d.roles, p.roles),
+                std::mem::replace(&mut d.ring_roles, p.ring_roles),
+                std::mem::replace(&mut d.sections, p.sections),
+                d.track.latest.replace(p.latest),
+            );
+            // (what the deck read off the track it played: freed in pieces if the engine does)
+            if let Some(old) = old {
+                self.let_go_project(old);
+            }
+            self.let_go(old_parts);
+            let d = &mut self.decks[i];
             // `netBaseBPM = project.tempo > 0 ? project.tempo : 120`
             d.base_tempo = if tempo > 0.0 { tempo } else { 120.0 };
             if new_track {

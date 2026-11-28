@@ -1,47 +1,209 @@
-//! An engine freed a piece at a time.
+//! An engine, or what an engine lets go of, freed a piece at a time.
 //!
 //! A host whose audio thread is the only thread its engine has (djweb: the engine lives in an
-//! AudioWorklet) frees an engine it swaps out on that thread. Freed whole, an engine with two
+//! AudioWorklet) frees on that thread whatever its engine lets go of. Freed whole, an engine with two
 //! decks playing is about 20 ms (native) of compiled projects (their nets, their lanes, the
 //! projects they were compiled from): several render quanta, an underrun. A [`Teardown`] takes
 //! the engine apart into those pieces, cheaply (moves, nothing freed), and the host frees a few
 //! per quantum ([`step`](Teardown::step)), the engine itself (what is left) last.
+//!
+//! The same holds for a track a deck lets go of when another lands on it (the compiled project
+//! the render thread retires, the project the deck played, the share it was loaded from): an
+//! engine set to free in pieces ([`Engine::set_free_in_pieces`]) keeps those as [`Pieces`] for
+//! the host to free a few per quantum ([`Engine::free_step`]), so the quantum a section lands in
+//! frees nothing.
+//!
+//! A piece is small: the parts with many allocations of their own (a net's places and
+//! transitions, its id lists, a share's JSON) free [`SHRINK`] entries a step, not all at once.
 
 use std::any::Any;
 
-use crate::pflow::Project;
+use crate::json::JsonValue;
+use crate::pflow::{NetBundle, Project};
+use crate::wave::net::CompiledNet;
 use crate::wave::WaveProject;
 
 use super::engine::{Engine, Renderer};
 
-pub struct Teardown {
-    /// Freed from the end: the pieces first, the engine and its renderer last.
-    pieces: Vec<Box<dyn Any>>,
+/// Entries (a net's places, transitions or arcs, ids, JSON nodes) a piece frees at most per step,
+/// about: each a few allocations, so a step stays around a thousand allocator calls.
+pub const SHRINK: usize = 128;
+
+/// Something freed a bit at a time.
+trait Shrink {
+    /// Free about [`SHRINK`] entries' worth. True once it is all freed.
+    fn shrink(&mut self) -> bool;
 }
 
-impl Teardown {
-    pub fn new(mut e: Engine, mut r: Renderer) -> Teardown {
-        let mut pieces: Vec<Box<dyn Any>> = Vec::new();
-        for p in r.take_projects() {
-            wave_pieces(p, &mut pieces);
+/// Freed in one go.
+struct Whole<T>(Option<T>);
+
+impl<T> Shrink for Whole<T> {
+    fn shrink(&mut self) -> bool {
+        self.0 = None;
+        true
+    }
+}
+
+/// A list of ids, freed [`SHRINK`] at a time.
+struct Strings(Vec<String>);
+
+impl Shrink for Strings {
+    fn shrink(&mut self) -> bool {
+        let keep = self.0.len().saturating_sub(SHRINK);
+        self.0.truncate(keep);
+        if keep == 0 {
+            self.0 = Vec::new();
         }
-        for d in e.decks.iter_mut() {
-            if let Some(p) = d.project.take() {
-                project_pieces(p, &mut pieces);
-            }
+        keep == 0
+    }
+}
+
+/// A net's places, transitions, arcs and bindings, [`SHRINK`] at a time, then the rest.
+struct Bundle(Option<NetBundle>);
+
+impl Shrink for Bundle {
+    fn shrink(&mut self) -> bool {
+        let Some(b) = self.0.as_mut() else { return true };
+        if !b.transitions.free_some(SHRINK) || !b.places.free_some(SHRINK) || !b.bindings.free_some(SHRINK) {
+            return false;
         }
-        let mut all: Vec<Box<dyn Any>> = Vec::with_capacity(pieces.len() + 2);
-        all.push(Box::new(e));
-        all.push(Box::new(r));
-        all.extend(pieces);
-        Teardown { pieces: all }
+        if !b.arcs.is_empty() {
+            let keep = b.arcs.len().saturating_sub(SHRINK);
+            b.arcs.truncate(keep);
+            return false;
+        }
+        self.0 = None;
+        true
+    }
+}
+
+struct Piece {
+    name: &'static str,
+    thing: Box<dyn Shrink>,
+}
+
+/// Things to free later, a few at a time, from the end: a compiled project or a project goes in
+/// as its nets and lanes (each a piece), itself (what is left) freed after them.
+#[derive(Default)]
+pub struct Pieces {
+    pieces: Vec<Piece>,
+}
+
+impl Pieces {
+    /// Anything, as one piece.
+    pub fn push<T: Any>(&mut self, x: T) {
+        self.pieces.push(Piece { name: core::any::type_name::<T>(), thing: Box::new(Whole(Some(x))) });
     }
 
-    /// Free up to `n` pieces. True once everything is freed.
+    fn push_shrink(&mut self, name: &'static str, s: impl Shrink + 'static) {
+        self.pieces.push(Piece { name, thing: Box::new(s) });
+    }
+
+    fn push_strings(&mut self, v: Vec<String>) {
+        if !v.is_empty() {
+            self.push_shrink("ids", Strings(v));
+        }
+    }
+
+    fn push_bundle(&mut self, b: NetBundle) {
+        self.push_shrink("NetBundle", Bundle(Some(b)));
+    }
+
+    /// A compiled net: its bundle and its id lists, then the rest.
+    fn push_net(&mut self, mut n: CompiledNet) {
+        let bundle = std::mem::take(&mut n.bundle);
+        let ids = [std::mem::take(&mut n.place_ids), std::mem::take(&mut n.trans_ids), std::mem::take(&mut n.action_target)];
+        self.push(n);
+        self.push_bundle(bundle);
+        for v in ids {
+            self.push_strings(v);
+        }
+    }
+
+    /// A compiled project, as its lanes, its nets and the project they were compiled from.
+    pub fn push_wave(&mut self, mut p: WaveProject) {
+        // the sampler slots it holds are given back now, as dropping it would: freeing it later
+        // must not keep a slot from the bank any longer
+        p.release_slots();
+        let lanes = p.take_lanes();
+        let nets = std::mem::take(&mut p.graph.nets);
+        let project = std::mem::take(&mut p.graph.project);
+        // freed from the end: its parts, then what is left of it
+        self.push(p);
+        for l in lanes {
+            self.push(l);
+        }
+        for n in nets {
+            self.push_net(n);
+        }
+        self.push_project(project);
+    }
+
+    /// A project, as its nets and itself.
+    pub fn push_project(&mut self, mut p: Project) {
+        let keys: Vec<String> = p.nets.keys().to_vec();
+        let nets: Vec<NetBundle> = keys.iter().rev().filter_map(|k| p.nets.remove(k)).collect();
+        self.push(p);
+        for n in nets {
+            self.push_bundle(n);
+        }
+    }
+
+    /// A JSON document (a raw-`nets` share's payload: tens of thousands of nodes), as pieces of
+    /// about [`SHRINK`] nodes: a big container's children go in batches (small ones together,
+    /// big ones split again), its keys after them.
+    pub fn push_json(&mut self, v: JsonValue) {
+        let mut batch = (Vec::new(), 0usize);
+        self.json_into(v, &mut batch);
+        self.flush_json(&mut batch);
+    }
+
+    fn json_into(&mut self, v: JsonValue, batch: &mut (Vec<JsonValue>, usize)) {
+        let n = json_nodes(&v);
+        if n <= SHRINK {
+            if batch.1 + n > SHRINK {
+                self.flush_json(batch);
+            }
+            batch.0.push(v);
+            batch.1 += n;
+            return;
+        }
+        match v {
+            JsonValue::Array(a) => {
+                for x in a {
+                    self.json_into(x, batch);
+                }
+            }
+            JsonValue::Object(o) => {
+                let mut keys = Vec::new();
+                let mut values = Vec::new();
+                for (k, x) in o.into_entries() {
+                    keys.push(k);
+                    values.push(x);
+                }
+                self.push_strings(keys);
+                for x in values {
+                    self.json_into(x, batch);
+                }
+            }
+            v => batch.0.push(v),
+        }
+    }
+
+    fn flush_json(&mut self, batch: &mut (Vec<JsonValue>, usize)) {
+        if !batch.0.is_empty() {
+            self.push_shrink("json", Whole(Some(std::mem::take(&mut batch.0))));
+        }
+        batch.1 = 0;
+    }
+
+    /// Free up to `n` pieces' worth (a step of each). True once everything is freed.
     pub fn step(&mut self, n: usize) -> bool {
         for _ in 0..n {
-            if self.pieces.pop().is_none() {
-                break;
+            let Some(p) = self.pieces.last_mut() else { break };
+            if p.thing.shrink() {
+                self.pieces.pop();
             }
         }
         self.pieces.is_empty()
@@ -55,29 +217,66 @@ impl Teardown {
     pub fn is_empty(&self) -> bool {
         self.pieces.is_empty()
     }
+
+    /// What the piece freed next is (a type name, for a profile of what costs what).
+    pub fn next_name(&self) -> Option<&'static str> {
+        self.pieces.last().map(|p| p.name)
+    }
+
+    fn append(&mut self, other: Pieces) {
+        self.pieces.extend(other.pieces);
+    }
 }
 
-fn wave_pieces(mut p: WaveProject, out: &mut Vec<Box<dyn Any>>) {
-    let rest_first = out.len();
-    out.push(Box::new(())); // where the rest of `p` goes, freed after its parts
-    for l in p.take_lanes() {
-        out.push(Box::new(l));
+/// Nodes in `v` (itself, and everything under it).
+fn json_nodes(v: &JsonValue) -> usize {
+    match v {
+        JsonValue::Array(a) => 1 + a.iter().map(json_nodes).sum::<usize>(),
+        JsonValue::Object(o) => 1 + o.iter().map(|(_, v)| json_nodes(v)).sum::<usize>(),
+        _ => 1,
     }
-    for n in std::mem::take(&mut p.graph.nets) {
-        out.push(Box::new(n));
-    }
-    project_pieces(std::mem::take(&mut p.graph.project), out);
-    out[rest_first] = Box::new(p);
 }
 
-fn project_pieces(mut p: Project, out: &mut Vec<Box<dyn Any>>) {
-    let keys: Vec<String> = p.nets.keys().to_vec();
-    for k in keys.iter().rev() {
-        if let Some(n) = p.nets.remove(k) {
-            out.push(Box::new(n));
+pub struct Teardown {
+    /// Freed from the end: the pieces first, the engine and its renderer last.
+    pieces: Pieces,
+}
+
+impl Teardown {
+    pub fn new(mut e: Engine, mut r: Renderer) -> Teardown {
+        let mut parts = Pieces::default();
+        for p in r.take_projects() {
+            parts.push_wave(p);
         }
+        for d in e.decks.iter_mut() {
+            if let Some(p) = d.project.take() {
+                parts.push_project(p);
+            }
+        }
+        // what the engine was itself still freeing in pieces stays pieces
+        if let Some(f) = e.take_free_later() {
+            parts.append(f);
+        }
+        let mut pieces = Pieces::default();
+        pieces.push(e);
+        pieces.push(r);
+        pieces.append(parts);
+        Teardown { pieces }
     }
-    out.push(Box::new(p));
+
+    /// Free up to `n` pieces' worth. True once everything is freed.
+    pub fn step(&mut self, n: usize) -> bool {
+        self.pieces.step(n)
+    }
+
+    /// Pieces still to free.
+    pub fn len(&self) -> usize {
+        self.pieces.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pieces.is_empty()
+    }
 }
 
 #[cfg(test)]

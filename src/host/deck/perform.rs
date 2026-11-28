@@ -30,6 +30,7 @@ use crate::deck::turntable::SampleBuffer;
 use crate::fx::unit::FxParam;
 use crate::fx::{MasterFxKey, MasterMacro, ReverbKnob, StripKnob};
 use crate::journal::event::JournalEvent;
+use crate::json::JsonValue;
 use crate::session::action::DeckAction;
 use crate::session::model::{DeckParams, DeckSource, Session, SessionError, DEMO_ID};
 use crate::session::recorder::{source_descriptor, DeckSnapshot, SessionRecorder};
@@ -184,6 +185,30 @@ impl Engine {
         }
         self.trace_deck_action(&recorded);
         self.record_action(recorded);
+        out.applied
+    }
+
+    /// `perform(.load(deck, track's source), prepared: track)`: what installing a prepared
+    /// track ends with (djweb's worklet, a section landing). The same as that `perform`, but the
+    /// action, and with it a copy of the track's source (a raw-`nets` share's payload, tens of
+    /// thousands of JSON nodes to copy and free again), is made only when something records it
+    /// (a recorder, a journal, the action trace).
+    pub fn perform_load_prepared(&mut self, deck: &str, track: PreparedTrack) -> Applied {
+        let recorded = (self.recorder.is_some() || self.journal.is_some() || self.trace.is_some())
+            .then(|| DeckAction::Load { deck: deck.into(), source: track.source.deck_source() });
+        // what loading reads of the action: the deck and the kind of source (the track is loaded)
+        let hollow = DeckAction::Load {
+            deck: deck.into(),
+            source: match &track.source {
+                TrackSource::Net(spec) => DeckSource::Net(spec.clone()),
+                TrackSource::RawNets(_) => DeckSource::RawNets(JsonValue::Null),
+            },
+        };
+        let out = self.apply_deck_action(&hollow, PerformCtx { prepared: Some(track), ..PerformCtx::default() });
+        if let Some(recorded) = recorded {
+            self.trace_deck_action(&recorded);
+            self.record_action(recorded);
+        }
         out.applied
     }
 
