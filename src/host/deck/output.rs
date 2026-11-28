@@ -1,7 +1,7 @@
 //! From the mixer's planar blocks to a device's interleaved buffer, with the headphone cue
 //! routed the way `CueRouting.swift` does it (`ChannelRouterAU`: the master mix on one channel
-//! pair of a multichannel interface, the cue on another, every other channel silent), or on a
-//! second device through a ring.
+//! pair of a multichannel interface, the cue on another, every other channel silent), on a
+//! second device through a ring, or split mono on one stereo output (master left, cue right).
 //!
 //! No device needed: this is what the cpal callback runs ([`crate::host::audio`]), and what the
 //! tests run on plain slices.
@@ -22,6 +22,11 @@ pub enum Routing {
     /// The master on the first two channels of this stream; the cue is pushed to a ring that
     /// a second device's stream drains (`Interleaver::fill_from_ring`).
     CueDevice,
+    /// One stereo output shared by the master and the headphones, for a device with no second
+    /// pair (a laptop jack, Bluetooth): the left channel is the master summed to mono, the
+    /// right the cue summed to mono (a Y-splitter, or one earbud). Every other channel stays
+    /// silent.
+    SplitMono,
 }
 
 impl Routing {
@@ -34,6 +39,7 @@ impl Routing {
     pub fn fits(&self, channels: usize) -> bool {
         match self {
             Routing::Stereo | Routing::CueDevice => channels >= 1,
+            Routing::SplitMono => channels >= 2,
             Routing::Pairs {
                 master_pair,
                 cue_pair,
@@ -103,6 +109,15 @@ impl Interleaver {
                         } else {
                             f[0] = l[i];
                             f[1] = r[i];
+                        }
+                    }
+                }
+                Routing::SplitMono => {
+                    for i in 0..n {
+                        let f = &mut block[i * channels..(i + 1) * channels];
+                        if channels >= 2 {
+                            f[0] = 0.5 * (l[i] + r[i]);
+                            f[1] = 0.5 * (cl[i] + cr[i]);
                         }
                     }
                 }

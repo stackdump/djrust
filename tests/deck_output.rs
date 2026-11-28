@@ -51,6 +51,9 @@ fn routing_knows_what_fits() {
     }
     .fits(4));
     assert!(!Routing::Stereo.has_cue() && Routing::CueDevice.has_cue());
+    assert!(Routing::SplitMono.has_cue());
+    assert!(Routing::SplitMono.fits(2) && Routing::SplitMono.fits(4));
+    assert!(!Routing::SplitMono.fits(1), "a mono device has no second side");
 }
 
 #[test]
@@ -176,4 +179,44 @@ fn a_second_device_drains_the_cue_through_a_ring() {
         heard > 0.05,
         "the cue arrived on the second device: {heard}"
     );
+}
+
+#[test]
+fn split_mono_is_the_master_mid_on_the_left_and_the_cue_mid_on_the_right() {
+    // the same render routed two ways: the pairs carry each feed in stereo, split mono sums each
+    let pairs = Routing::Pairs {
+        master_pair: 0,
+        cue_pair: 2,
+    };
+    let (_e1, mut r1) = playing(true);
+    let (_e2, mut r2) = playing(true);
+    let (mut a, mut b) = (Interleaver::new(), Interleaver::new());
+    let mut wide = vec![0f32; 4 * 512];
+    let mut split = vec![0f32; 4 * 512];
+    let (mut master, mut cue) = (0.0, 0.0);
+    for _ in 0..40 {
+        a.fill(&mut r1, &pairs, 4, &mut wide, None);
+        // on a 4-channel device, so the channels past the pair are checked too
+        b.fill(&mut r2, &Routing::SplitMono, 4, &mut split, None);
+        for (w, s) in wide.chunks(4).zip(split.chunks(4)) {
+            assert_eq!(s[0], 0.5 * (w[0] + w[1]), "left: the master summed to mono");
+            assert_eq!(s[1], 0.5 * (w[2] + w[3]), "right: the cue summed to mono");
+            assert_eq!((s[2], s[3]), (0.0, 0.0), "every other channel silent");
+        }
+        master += rms(split.chunks(4).map(|f| f[0]));
+        cue += rms(split.chunks(4).map(|f| f[1]));
+    }
+    assert!(master > 0.05 && cue > 0.05, "both sides sound: {master} {cue}");
+}
+
+#[test]
+fn split_mono_with_nothing_cued_leaves_the_right_side_silent() {
+    let (_e, mut r) = playing(false);
+    let mut inter = Interleaver::new();
+    let mut out = vec![0f32; 2 * 512];
+    for _ in 0..40 {
+        inter.fill(&mut r, &Routing::SplitMono, 2, &mut out, None);
+    }
+    assert!(rms(out.chunks(2).map(|f| f[0])) > 0.01);
+    assert!(rms(out.chunks(2).map(|f| f[1])) < 1e-6);
 }
