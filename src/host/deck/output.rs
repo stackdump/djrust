@@ -149,8 +149,9 @@ impl Interleaver {
         }
     }
 
-    /// The second device's callback: pop the cue frames the first one pushed (silence when it
-    /// has not produced enough yet).
+    /// A 1:1 drain of the cue ring: pop the cue frames the first one pushed (silence when it
+    /// has not produced enough yet). Two real devices drift apart, so the live second stream
+    /// reads the ring through [`super::cue_resample::CueResampler`] instead.
     pub fn fill_from_ring(ring: &mut Consumer<f32>, channels: usize, out: &mut [f32]) {
         let channels = channels.max(1);
         for f in out.chunks_mut(channels) {

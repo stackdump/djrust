@@ -6,7 +6,12 @@
 //! The headphone cue follows `CueRouting.swift`: channel pairs of one multichannel device
 //! ([`Routing::Pairs`], e.g. the Inpulse's sound card: master 1/2, cue 3/4), or, where the
 //! headphones are a second device, a second stream fed through a ring ([`Routing::CueDevice`]).
-//! Different clocks drift; the ring just drops or pads. Apple-only differences: none of
+//! The two devices' clocks drift apart, so the second stream drains the ring through an
+//! adaptive resampler that holds its fill ([`crate::host::deck::cue_resample`]); the devices
+//! may run at different rates. The cue stream has its own [`StreamHealth`]
+//! ([`Running::cue_health`]): losing the headphones never stops the master.
+//!
+//! Apple-only differences: none of
 //! `AudioObjectSetPropertyData`'s device switching (a new `Output` is opened instead), and no
 //! automatic follow of the system default device.
 //!
@@ -25,6 +30,7 @@ use rtrb::RingBuffer;
 
 use std::sync::Arc;
 
+use crate::host::deck::cue_resample::{CueConfig, CueMonitor, CueResampler, CueStamp};
 use crate::host::deck::output::{Interleaver, Routing};
 use crate::host::deck::Renderer;
 use crate::host::device_watch::{check_buffer_frames, try_lock_live, Severity, StreamHealth};
@@ -187,7 +193,7 @@ impl Output {
     }
 
     /// Run `renderer` on this device. `cue_device` (with [`Routing::CueDevice`]) is the second
-    /// device's stream; its rate must equal this one's.
+    /// device's stream, at any rate: the cue is resampled to it, drift-corrected.
     pub fn start(
         self,
         renderer: Renderer,
@@ -222,19 +228,22 @@ impl Output {
         }
         let health = Arc::new(StreamHealth::new());
         let mut cue_stream = None;
+        let mut cue_health = None;
+        let mut cue_monitor = None;
+        // both callbacks' times are microseconds from here
+        let epoch = std::time::Instant::now();
+        let stamp = Arc::new(CueStamp::new());
         let ring = match (&routing, cue_device) {
             (Routing::CueDevice, Some(second)) => {
-                if second.sample_rate() != self.sample_rate() {
-                    return Err(be(format!(
-                        "{} runs at {} Hz, {} at {} Hz",
-                        second.name,
-                        second.sample_rate(),
-                        self.name,
-                        self.sample_rate()
-                    )));
-                }
+                // half a second of the master's frames, stereo: far past the loop's target
                 let (tx, rx) = RingBuffer::<f32>::new(self.sample_rate() as usize / 2 * 2);
-                cue_stream = Some(second.build_cue(rx, health.clone())?);
+                let h = Arc::new(StreamHealth::new());
+                let m = Arc::new(CueMonitor::new());
+                let cfg = CueConfig::new(self.sample_rate() as f64, second.sample_rate() as f64);
+                cue_stream =
+                    Some(second.build_cue(rx, cfg, stamp.clone(), epoch, h.clone(), m.clone())?);
+                cue_health = Some(h);
+                cue_monitor = Some(m);
                 Some(tx)
             }
             (Routing::CueDevice, None) => {
@@ -242,9 +251,14 @@ impl Output {
             }
             _ => None,
         };
+        let stamp = ring.is_some().then_some((stamp, epoch));
         let stream = match self.format {
-            cpal::SampleFormat::F32 => self.build::<f32>(renderer, routing, ring, health.clone())?,
-            cpal::SampleFormat::I16 => self.build::<i16>(renderer, routing, ring, health.clone())?,
+            cpal::SampleFormat::F32 => {
+                self.build::<f32>(renderer, routing, ring, stamp, health.clone())?
+            }
+            cpal::SampleFormat::I16 => {
+                self.build::<i16>(renderer, routing, ring, stamp, health.clone())?
+            }
             other => {
                 return Err(be(format!(
                     "{} wants {other:?} samples; f32 and i16 are supported",
@@ -258,6 +272,8 @@ impl Output {
         }
         Ok(Running {
             health,
+            cue_health,
+            cue_monitor,
             _stream: stream,
             _cue: cue_stream,
         })
@@ -268,6 +284,7 @@ impl Output {
         mut renderer: Source,
         routing: Routing,
         mut ring: Option<rtrb::Producer<f32>>,
+        stamp: Option<(Arc<CueStamp>, std::time::Instant)>,
         health: Arc<StreamHealth>,
     ) -> Result<Stream, HostError>
     where
@@ -327,6 +344,11 @@ impl Output {
                     if silent {
                         beat.silent_fill();
                     }
+                    // the cue resampler measures the ring against this push (cue_resample)
+                    if let Some((stamp, epoch)) = &stamp {
+                        let us = now.saturating_duration_since(*epoch).as_micros() as u64;
+                        stamp.mark(us, data.len() / channels.max(1));
+                    }
                 },
                 move |e| report(&health, "audio", &e),
                 None,
@@ -334,18 +356,43 @@ impl Output {
             .map_err(be)
     }
 
+    /// The second device's stream: the cue ring drained through a [`CueResampler`], under
+    /// its own `health` (the same guard and heartbeat as the master's).
     fn build_cue(
         self,
         mut rx: rtrb::Consumer<f32>,
+        cfg: CueConfig,
+        stamp: Arc<CueStamp>,
+        epoch: std::time::Instant,
         health: Arc<StreamHealth>,
+        monitor: Arc<CueMonitor>,
     ) -> Result<Stream, HostError> {
         let channels = self.channels();
+        let in_rate = cfg.in_rate;
+        let rate = cfg.out_rate;
+        let mut rs = CueResampler::new(cfg);
+        let beat = health.clone();
+        let mut last: Option<std::time::Instant> = None;
         match self.format {
             cpal::SampleFormat::F32 => self
                 .device
                 .build_output_stream(
                     self.config,
-                    move |data: &mut [f32], _| Interleaver::fill_from_ring(&mut rx, channels, data),
+                    move |data: &mut [f32], _| {
+                        beat.beat();
+                        let now = std::time::Instant::now();
+                        let gap = last.map(|t| now.saturating_duration_since(t).as_secs_f64());
+                        last = Some(now);
+                        beat.callback(data.len() / channels.max(1), gap, rate);
+                        let us = now.saturating_duration_since(epoch).as_micros() as u64;
+                        let (lead, push) = (stamp.lead(us, in_rate), stamp.frames());
+                        let ok = beat.guard_buffer(data, 0.0, |data| {
+                            rs.fill(&mut rx, channels, data, lead, push, Some(&monitor))
+                        });
+                        if !ok || !rs.playing() {
+                            beat.silent_fill();
+                        }
+                    },
                     move |e| report(&health, "cue audio", &e),
                     None,
                 )
@@ -360,9 +407,13 @@ impl Output {
 
 /// The streams, alive while this is.
 pub struct Running {
-    /// What the callbacks report: the heartbeat (the master stream's) and the first fatal
-    /// error of either stream.
+    /// What the master stream's callbacks report: its heartbeat and its first fatal error.
     pub health: Arc<StreamHealth>,
+    /// The cue device's stream, with [`Routing::CueDevice`]: its own heartbeat and fault, so
+    /// the host can tell "the headphones went" from "the master went".
+    pub cue_health: Option<Arc<StreamHealth>>,
+    /// The cue resampler's state: underruns, skips, fill, the drift it corrects.
+    pub cue_monitor: Option<Arc<CueMonitor>>,
     _stream: Stream,
     _cue: Option<Stream>,
 }

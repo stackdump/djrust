@@ -52,6 +52,8 @@ pub mod inserts;
 pub mod automix;
 pub mod bar_next;
 pub mod copy;
+/// The cue on a second device: the drift-correcting resampler between two clocks.
+pub mod cue_resample;
 pub mod beat;
 pub mod capture;
 pub mod clips;
