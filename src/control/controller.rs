@@ -188,6 +188,20 @@ pub enum Action {
         input: Option<String>,
         beats: Option<f64>,
     },
+    /// A roll on a strip's history (`historyLoop` with `op=roll`): `on` while the pad is held,
+    /// a loop of the last grid line's `beats` (None: the strip's roll length); let go, back to
+    /// live where the strip would have been.
+    HistoryRoll {
+        input: Option<String>,
+        beats: Option<f64>,
+        on: bool,
+    },
+    /// Slip mode on a strip's history (`historyLive` with `op=slip`): a released jog goes back
+    /// to live. `on` None toggles it.
+    HistorySlip {
+        input: Option<String>,
+        on: Option<bool>,
+    },
     /// `dj.loopRecord(deck, on:, bars: tapTakeBars)`. Beyond Swift, `deck` may name another
     /// loop source: `V`, `M` or an input strip's label (docs/LOOP-SOURCES.md).
     LoopRecord {
@@ -943,10 +957,36 @@ impl SurfaceController {
                 }
             }
             K::HistoryLive => {
+                let op = b.args.get("op").map(String::as_str).unwrap_or("live");
                 if press {
                     self.flash(&b, now);
-                    host.perform(Action::HistoryLive { input: b.param.clone() });
+                    if let Some(on) = match op {
+                        "slip" => Some(None),
+                        "slip_on" => Some(Some(true)),
+                        "slip_off" => Some(Some(false)),
+                        _ => None,
+                    } {
+                        host.perform(Action::HistorySlip { input: b.param.clone(), on });
+                    } else {
+                        host.perform(Action::HistoryLive { input: b.param.clone() });
+                    }
                 }
+            }
+            K::HistoryLoop if b.args.get("op").is_some_and(|o| o == "roll") => {
+                // held: a roll; let go: back to live (also on a release with no press seen)
+                if press {
+                    self.flash(&b, now);
+                }
+                let beats = b
+                    .args
+                    .get("beats")
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .filter(|x| *x > 0.0);
+                host.perform(Action::HistoryRoll {
+                    input: b.param.clone(),
+                    beats,
+                    on: press,
+                });
             }
             K::HistoryLoop => {
                 if press {

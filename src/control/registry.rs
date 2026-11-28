@@ -298,6 +298,24 @@ const VOC_TRANSPOSE: ParamSpec = ParamSpec {
     help: "semitones added to each key (default 0)",
 };
 
+const LIVE_OP: ParamSpec = ParamSpec {
+    kind: ParamKind::Arg,
+    name: "op",
+    choices: &["live", "slip", "slip_on", "slip_off"],
+    help: "live (default): back to live now; slip toggles slip mode (a released jog goes back to live, the strip played on underneath); slip_on / slip_off set it",
+};
+const LOOP_OP: ParamSpec = ParamSpec {
+    kind: ParamKind::Arg,
+    name: "op",
+    choices: &["loop", "roll"],
+    help: "loop (default): loop in place until back to live; roll: loop while held, on the grid, then rejoin where the strip would have been",
+};
+const ROLL_BEATS: ParamSpec = ParamSpec {
+    kind: ParamKind::Arg,
+    name: "beats",
+    choices: &["0.125", "0.25", "0.5", "1"],
+    help: "a roll's length in beats (default the strip's roll length, 1/4 beat)",
+};
 const FREEZE_OP: ParamSpec = ParamSpec {
     kind: ParamKind::Arg,
     name: "op",
@@ -449,8 +467,8 @@ pub fn info(k: DJActionKind) -> TargetInfo {
             K::LibraryLoad => ("Library loop to the row", "Capture", Trigger, &[SLOT]),
             K::LibrarySave => ("Save a clip to the library", "Capture", Trigger, &[SLOT]),
             K::HistoryScrub => ("History scrub", "Capture", Relative, &[INPUT]),
-            K::HistoryLive => ("History back to live", "Capture", Trigger, &[INPUT]),
-            K::HistoryLoop => ("History loop in place", "Capture", Trigger, &[INPUT, SLOT]),
+            K::HistoryLive => ("History back to live (or slip mode)", "Capture", Trigger, &[INPUT, LIVE_OP]),
+            K::HistoryLoop => ("History loop in place (or a roll, held)", "Capture", Trigger, &[INPUT, SLOT, LOOP_OP, ROLL_BEATS]),
             K::Td3ClockSource => ("TD-3 clock source", "Gear", Trigger, &[CLOCK_SOURCE]),
             K::MidiOut => ("MIDI out to gear", "Gear", Keyed, &[OUT_DEVICE, OUT_CHANNEL, OUT_TYPE, OUT_NOTE]),
             K::InputLatency => ("Input latency offset", "Capture", Cont, &[LAT_INPUT, LAT_RANGE]),

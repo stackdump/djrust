@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
 
 use crate::fx::granular::{FreezeSettings, GrainFreeze, MAX_FREEZE_BEATS};
-use crate::history::{self, History, Mode, Scrubber};
+use crate::history::{self, History, LoopAsk, Mode, Scrubber};
 
 /// A strip that is not an input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -65,6 +65,10 @@ pub enum RecallMsg {
     Release,
     Live,
     LoopGrab(f64),
+    /// Loop the history's beats ending at a render frame (a roll, a failsafe loop).
+    LoopAt(LoopAsk),
+    /// Back to live over `fade` frames, if loop `id` is still the one playing.
+    LiveIf { id: u32, fade: f32 },
     FreezeSet(FreezeSettings),
     Freeze { on: bool, beats: f64, at: Option<i64> },
     FreezeScrub(f64),
@@ -81,6 +85,8 @@ pub trait RecallView {
     fn history_lag_beats(&self) -> f32;
     fn history_loop_beats(&self) -> f32;
     fn history_filled_beats(&self) -> f32;
+    /// The id of the loop playing now (0: not looping, or a loop nobody named).
+    fn history_loop_id(&self) -> u32;
 }
 
 /// What a strip's history publishes for the main thread.
@@ -94,6 +100,7 @@ pub struct RecallMirror {
     hist_lag_beats: AtomicU32,
     hist_loop_beats: AtomicU32,
     hist_filled_beats: AtomicU32,
+    hist_loop_id: AtomicU32,
 }
 
 fn f(a: &AtomicU32) -> f32 {
@@ -125,6 +132,9 @@ impl RecallView for RecallMirror {
     fn history_filled_beats(&self) -> f32 {
         f(&self.hist_filled_beats)
     }
+    fn history_loop_id(&self) -> u32 {
+        self.hist_loop_id.load(Ordering::Relaxed)
+    }
 }
 
 /// The render thread's half: a stereo history, its read heads, the freeze.
@@ -136,6 +146,8 @@ pub(crate) struct StripRecall {
     sample_rate: f64,
     freeze: GrainFreeze,
     pending: Option<(bool, f64, i64)>,
+    /// A loop waiting for its block.
+    pending_loop: Option<LoopAsk>,
     mirror: Arc<RecallMirror>,
 }
 
@@ -157,11 +169,19 @@ impl StripRecall {
                     as usize,
             ),
             pending: None,
+            pending_loop: None,
             mirror,
         }
     }
 
     pub(crate) fn apply(&mut self, m: RecallMsg) {
+        if matches!(
+            m,
+            RecallMsg::Touch | RecallMsg::Scrub(_) | RecallMsg::Release | RecallMsg::Live | RecallMsg::LoopGrab(_)
+        ) {
+            // a move of the head by hand overrides a loop still waiting for its frame
+            self.pending_loop = None;
+        }
         match m {
             RecallMsg::Tempo(bpm) => self.bpm = bpm.clamp(20.0, 400.0),
             RecallMsg::HistoryBeats(b) => {
@@ -192,6 +212,15 @@ impl StripRecall {
                     }
                 }
             }
+            RecallMsg::LoopAt(ask) => self.pending_loop = Some(ask),
+            RecallMsg::LiveIf { id, fade } => {
+                if self.pending_loop.is_some_and(|a| a.id == id) {
+                    self.pending_loop = None;
+                }
+                for s in self.scrub.iter_mut() {
+                    s.live_if(id, fade as f64);
+                }
+            }
             RecallMsg::FreezeSet(s) => self.freeze.configure(&s),
             RecallMsg::FreezeScrub(fr) => self.freeze.scrub(fr),
             RecallMsg::Freeze { on, beats, at } => {
@@ -207,6 +236,12 @@ impl StripRecall {
         let n = l.len().min(r.len());
         self.hist[0].push(&l[..n]);
         self.hist[1].push(&r[..n]);
+        if let Some(ask) = self.pending_loop.filter(|a| a.due(frame, n)) {
+            self.pending_loop = None;
+            for c in 0..2 {
+                ask.start(&mut self.scrub[c], &self.hist[c], frame, n, self.bpm, self.sample_rate);
+            }
+        }
         let win = history::window_frames(self.beats, self.bpm, self.sample_rate, self.hist[0].capacity());
         self.scrub[0].process(&self.hist[0], win, self.bpm, &mut l[..n]);
         self.scrub[1].process(&self.hist[1], win, self.bpm, &mut r[..n]);
@@ -247,6 +282,8 @@ impl StripRecall {
         m.hist_lag_beats.store(lag.to_bits(), Ordering::Relaxed);
         let lb = self.scrub[0].loop_beats().unwrap_or(0.0) as f32;
         m.hist_loop_beats.store(lb.to_bits(), Ordering::Relaxed);
+        m.hist_loop_id
+            .store(self.scrub[0].loop_id().unwrap_or(0), Ordering::Relaxed);
         let held = (self.hist[0].written().min(win as u64) as f64 / fpb) as f32;
         m.hist_filled_beats.store(held.to_bits(), Ordering::Relaxed);
     }
@@ -319,6 +356,9 @@ impl RecallView for super::input::InputMirror {
     }
     fn history_filled_beats(&self) -> f32 {
         super::input::InputMirror::history_filled_beats(self)
+    }
+    fn history_loop_id(&self) -> u32 {
+        super::input::InputMirror::history_loop_id(self)
     }
 }
 
@@ -427,6 +467,8 @@ impl Engine {
                     RecallMsg::Release => InputMsg::Release,
                     RecallMsg::Live => InputMsg::Live,
                     RecallMsg::LoopGrab(b) => InputMsg::LoopGrab(b),
+                    RecallMsg::LoopAt(a) => InputMsg::LoopAt(a),
+                    RecallMsg::LiveIf { id, fade } => InputMsg::LiveIf { id, fade },
                     RecallMsg::FreezeSet(s) => InputMsg::FreezeSet(s),
                     RecallMsg::Freeze { on, beats, at } => InputMsg::Freeze { on, beats, at },
                     RecallMsg::FreezeScrub(f) => InputMsg::FreezeScrub(f),

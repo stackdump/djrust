@@ -865,6 +865,8 @@ impl Engine {
             | X::HistoryScrub { input, .. }
             | X::HistoryLive { input }
             | X::HistoryLoop { input, .. }
+            | X::HistoryRoll { input, .. }
+            | X::HistorySlip { input, .. }
                 if self.recall_target(input.as_deref()).is_some() =>
             {
                 return None
@@ -917,6 +919,8 @@ impl Engine {
                 false,
                 vec![],
             ),
+            // no strip to roll or slip: nothing happened
+            X::HistoryRoll { .. } | X::HistorySlip { .. } => return None,
             X::Target {
                 id,
                 deck,

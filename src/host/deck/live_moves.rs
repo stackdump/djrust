@@ -181,6 +181,13 @@ impl Engine {
             "loop_step" => {
                 self.input_loop_step(i, num(p, "dir").unwrap_or(1.0).signum() as i32);
             }
+            "roll" => {
+                let on = flag(p, "on").unwrap_or(true);
+                self.history_roll(i, on, num(p, "beats"));
+            }
+            "slip" => {
+                self.set_history_slip(i, flag(p, "on").unwrap_or(true));
+            }
             "beats" => match i {
                 RecallId::Input(k) => {
                     self.set_input_history_beats(k, num(p, "beats").ok_or("beats: no beats")?);
@@ -189,7 +196,7 @@ impl Engine {
             },
             o => {
                 return Err(format!(
-                    "history action {o:?}: scrub, live, loop, loop_step, beats or jog"
+                    "history action {o:?}: scrub, live, loop, loop_step, roll, slip, beats or jog"
                 ))
             }
         }

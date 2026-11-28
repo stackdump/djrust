@@ -1062,6 +1062,8 @@ pub struct Engine {
     /// The wheel follows what the deck holds: it scrubs the history only while the deck is
     /// empty or a modifier is held (docs/INPUT-HISTORY.md, [`super::jog_target`]).
     pub history_jog: Option<(String, super::strip_recall::RecallId)>,
+    /// Rolls, slip and the loops asked by id on any strip's history (`roll.rs`).
+    pub(crate) history_hands: super::roll::HistoryHands,
     /// Where the aimed deck's wheel goes now: the modifiers held, a touch's latch, the last
     /// target logged.
     pub jog_follow: super::jog_target::JogFollow,
@@ -1322,6 +1324,7 @@ pub fn engine(config: EngineConfig) -> (Engine, Renderer) {
         tap: crate::mixer::TapTempo::default(),
         inputs: main_inputs,
         history_jog: None,
+        history_hands: Default::default(),
         jog_follow: Default::default(),
         capture_library: None,
         input_takes: Vec::new(),

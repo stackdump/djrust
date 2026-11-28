@@ -86,6 +86,7 @@ pub mod perform;
 pub mod relocate;
 pub mod retune;
 pub mod rig;
+pub mod roll;
 pub mod sample;
 pub mod samplers;
 /// Whole-session snapshots (`DjSnapshot` v1): capture, check, restore.

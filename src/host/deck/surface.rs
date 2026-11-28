@@ -525,6 +525,17 @@ impl Engine {
                     self.input_loop(i, beats);
                 }
             }
+            Action::HistoryRoll { input, beats, on } => {
+                if let Some(i) = self.recall_target(input.as_deref()) {
+                    self.history_roll(i, on, beats);
+                }
+            }
+            Action::HistorySlip { input, on } => {
+                if let Some(i) = self.recall_target(input.as_deref()) {
+                    let on = on.unwrap_or(!self.history_slip(i));
+                    self.set_history_slip(i, on);
+                }
+            }
             Action::LibraryLoad { slot } => {
                 if let Some(m) = self.library_entries().get(slot) {
                     let id = m.id.clone();

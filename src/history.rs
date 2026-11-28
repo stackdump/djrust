@@ -31,8 +31,13 @@ pub const DEFAULT_BEATS: f64 = 64.0;
 pub const LOOP_BEATS: [f64; 7] = [0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0];
 /// The default loop length.
 pub const DEFAULT_LOOP_BEATS: f64 = 4.0;
-/// Frames the head takes to fade in or out against the live signal.
-const FADE_FRAMES: f64 = 64.0;
+/// Roll lengths, in beats (a 1/32 note up to a 1/4 note): a roll is a loop of the history held
+/// while a pad is down, so the strip plays on underneath and rejoins it on release.
+pub const ROLL_BEATS: [f64; 4] = [0.125, 0.25, 0.5, 1.0];
+/// The default roll length (a 1/16 note).
+pub const DEFAULT_ROLL_BEATS: f64 = 0.25;
+/// Frames the head takes to fade in or out against the live signal (the declick).
+pub const FADE_FRAMES: f64 = 64.0;
 /// A held platter closes this fraction of its distance to the wheel each block.
 const CHASE: f64 = 0.5;
 /// Slack frames kept so the interpolator never reads a sample the ring just overwrote.
@@ -56,12 +61,32 @@ pub fn window_frames(beats: f64, bpm: f64, sample_rate: f64, capacity: usize) ->
 
 /// The next loop length up (`dir > 0`) or down in [`LOOP_BEATS`].
 pub fn step_loop_beats(current: f64, dir: i32) -> f64 {
-    let i = LOOP_BEATS
+    step_in(&LOOP_BEATS, current, dir)
+}
+
+/// The next roll length up (`dir > 0`) or down in [`ROLL_BEATS`].
+pub fn step_roll_beats(current: f64, dir: i32) -> f64 {
+    step_in(&ROLL_BEATS, current, dir)
+}
+
+fn step_in(steps: &[f64], current: f64, dir: i32) -> f64 {
+    let i = steps
         .iter()
         .position(|b| *b >= current - 1e-9)
-        .unwrap_or(LOOP_BEATS.len() - 1);
-    let j = (i as i32 + dir.signum()).clamp(0, LOOP_BEATS.len() as i32 - 1);
-    LOOP_BEATS[j as usize]
+        .unwrap_or(steps.len() - 1);
+    let j = (i as i32 + dir.signum()).clamp(0, steps.len() as i32 - 1);
+    steps[j as usize]
+}
+
+/// Where the last grid line of `beats` lies at or before beat `beat` of a clock of `fpb` frames
+/// a beat, as frames back from now (0 when now is on one). A roll's loop ends there, so it is
+/// on the grid at once.
+pub fn frames_since_grid(beat: f64, beats: f64, fpb: f64) -> f64 {
+    if beats.is_nan() || beats <= 0.0 || fpb.is_nan() || fpb <= 0.0 || !beat.is_finite() {
+        return 0.0;
+    }
+    let line = libm::floor(beat / beats + 1e-9) * beats;
+    ((beat - line) * fpb).max(0.0)
 }
 
 /// The mono ring.
@@ -171,6 +196,51 @@ impl Mode {
     }
 }
 
+/// A loop asked of a head by the main thread ([`Scrubber::loop_ending_at`] in render frames):
+/// `beats` ending at render frame `end`, fading over `fade` frames, under `id`. It waits for
+/// the block that reaches `end` ([`LoopAsk::due`]), so an `end` ahead of now is a loop that
+/// starts on that frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LoopAsk {
+    pub beats: f64,
+    pub end: i64,
+    pub fade: f32,
+    pub id: u32,
+}
+
+impl LoopAsk {
+    /// Has the block starting at render frame `frame`, `n` frames long, reached `end`?
+    pub fn due(&self, frame: i64, n: usize) -> bool {
+        self.end <= frame + n as i64
+    }
+
+    /// Ask `head` for it, in the block at render frame `frame` of `n` frames that `hist` has
+    /// just been given (so its newest frame is render frame `frame + n - 1`). False when the
+    /// ring does not hold enough.
+    pub fn start(
+        &self,
+        head: &mut Scrubber,
+        hist: &History,
+        frame: i64,
+        n: usize,
+        bpm: f64,
+        sample_rate: f64,
+    ) -> bool {
+        // render frame → the ring's absolute index
+        let offset = hist.written() as i64 - (frame + n as i64);
+        head.loop_ending_at(
+            hist,
+            self.end + offset,
+            frame + offset,
+            self.beats,
+            bpm,
+            sample_rate,
+            self.fade as f64,
+            self.id,
+        )
+    }
+}
+
 /// The read head over a [`History`].
 pub struct Scrubber {
     mode: Mode,
@@ -187,6 +257,13 @@ pub struct Scrubber {
     loop_beats: f64,
     /// The absolute index one past the loop's last frame (a re-grab keeps the end).
     loop_end: i64,
+    /// Who asked for the loop playing now (0: nobody in particular), so a move can end its
+    /// own loop without cutting a later one ([`Scrubber::live_if`]).
+    loop_id: u32,
+    /// The weight moves this much a frame: 1 / the fade's frames.
+    fade_step: f64,
+    /// Fading back to live from a loop: the fade keeps reading the loop, not the old head.
+    from_loop: bool,
 }
 
 impl Scrubber {
@@ -203,7 +280,19 @@ impl Scrubber {
             loop_bpm: 120.0,
             loop_beats: DEFAULT_LOOP_BEATS,
             loop_end: 0,
+            loop_id: 0,
+            fade_step: 1.0 / FADE_FRAMES,
+            from_loop: false,
         }
+    }
+
+    /// The id the loop playing now was asked with (None: not looping).
+    pub fn loop_id(&self) -> Option<u32> {
+        (self.mode == Mode::Loop).then_some(self.loop_id)
+    }
+
+    fn set_fade(&mut self, frames: f64) {
+        self.fade_step = 1.0 / frames.max(1.0);
     }
 
     pub fn mode(&self) -> Mode {
@@ -225,6 +314,8 @@ impl Scrubber {
 
     /// The platter is touched: the live signal gives way to the head, from where it was.
     pub fn touch(&mut self, hist: &History) {
+        self.set_fade(FADE_FRAMES);
+        self.from_loop = false;
         match self.mode {
             Mode::Touch => {}
             Mode::Play => {
@@ -255,9 +346,56 @@ impl Scrubber {
         }
     }
 
-    /// Back to the live signal (a short crossfade).
+    /// Back to the live signal (a short crossfade). The live signal ran on underneath, so once
+    /// the fade is over the strip is exactly where it would have been.
     pub fn live(&mut self) {
+        self.live_with_fade(FADE_FRAMES);
+    }
+
+    /// [`Scrubber::live`] over `fade_frames`.
+    pub fn live_with_fade(&mut self, fade_frames: f64) {
+        self.from_loop = self.mode == Mode::Loop || (self.from_loop && self.mode == Mode::Live);
+        self.set_fade(fade_frames);
         self.mode = Mode::Live;
+    }
+
+    /// Back to live only if the loop playing now is loop `id` (a roll let go after another
+    /// move took the strip leaves that move alone). True if it went live.
+    pub fn live_if(&mut self, id: u32, fade_frames: f64) -> bool {
+        if self.loop_id() != Some(id) {
+            return false;
+        }
+        self.live_with_fade(fade_frames);
+        true
+    }
+
+    /// Loop `beats` whole beats ending at absolute index `end` (one past the loop's last frame)
+    /// at `bpm`, entering it at the phase it would have had had it looped since `end`, with
+    /// `now` the absolute index of the frame about to be played: a loop ending on a grid line
+    /// is on the grid at once, and while `now` is before `end` it plays exactly what the live
+    /// signal does. Fades in over `fade_frames`. False when the ring holds fewer than two
+    /// of those frames.
+    #[allow(clippy::too_many_arguments)]
+    pub fn loop_ending_at(
+        &mut self,
+        hist: &History,
+        end: i64,
+        now: i64,
+        beats: f64,
+        bpm: f64,
+        sample_rate: f64,
+        fade_frames: f64,
+        id: u32,
+    ) -> bool {
+        let end = end.min(hist.written() as i64);
+        if !self.grab_loop_ending_at(hist, end, beats, bpm, sample_rate) {
+            return false;
+        }
+        let len = self.loop_len as i64;
+        self.loop_pos = (now - end).rem_euclid(len) as f64;
+        self.loop_id = id;
+        self.set_fade(fade_frames);
+        true
     }
 
     /// Loop `beats` whole beats ending at the head (or at the newest frame when live), at
@@ -315,6 +453,9 @@ impl Scrubber {
         self.loop_bpm = bpm.max(1.0);
         self.loop_beats = beats;
         self.loop_end = end;
+        self.loop_id = 0;
+        self.set_fade(FADE_FRAMES);
+        self.from_loop = false;
         self.mode = Mode::Loop;
         true
     }
@@ -346,7 +487,8 @@ impl Scrubber {
             self.mode = Mode::Live;
         }
         let want = if self.mode == Mode::Live { 0.0 } else { 1.0 };
-        let step = 1.0 / FADE_FRAMES;
+        let step = self.fade_step;
+        let fading_loop = self.mode == Mode::Live && self.from_loop && self.loop_len > 0;
         // a held platter: how far it moves this block
         let v = if self.mode == Mode::Touch {
             let d = self.target - self.pos;
@@ -365,6 +507,16 @@ impl Scrubber {
                 Mode::Touch => {
                     let s = if v == 0.0 { 0.0 } else { hist.read(self.pos) };
                     self.pos += v;
+                    s
+                }
+                // Live, fading out of a loop, keeps reading the loop
+                Mode::Live if fading_loop => {
+                    let s = self.loop_at(self.loop_pos);
+                    self.loop_pos += rate;
+                    let len = self.loop_len as f64;
+                    if self.loop_pos >= len {
+                        self.loop_pos -= len * libm::floor(self.loop_pos / len);
+                    }
                     s
                 }
                 // Live, fading out, keeps playing at 1x like Play
@@ -403,6 +555,133 @@ mod tests {
     fn ramp(h: &mut History, from: usize, n: usize) {
         let v: Vec<f32> = (from..from + n).map(|k| k as f32 / 1e6).collect();
         h.push(&v);
+    }
+
+    /// Push render frames `at..at+n` of the ramp and play them through `s`; returns what it
+    /// played and the ramp's own frames (the live signal).
+    fn block(h: &mut History, s: &mut Scrubber, at: &mut usize, n: usize, ask: Option<LoopAsk>) -> (Vec<f32>, Vec<f32>) {
+        ramp(h, *at, n);
+        let live: Vec<f32> = (*at..*at + n).map(|k| k as f32 / 1e6).collect();
+        if let Some(a) = ask {
+            assert!(a.due(*at as i64, n));
+            assert!(a.start(s, h, *at as i64, n, 120.0, SR));
+        }
+        let mut b = live.clone();
+        s.process(h, h.capacity(), 120.0, &mut b);
+        *at += n;
+        (b, live)
+    }
+
+    #[test]
+    fn a_loop_ending_at_a_frame_enters_at_its_phase() {
+        let cap = capacity_for(8.0, SR);
+        let mut h = History::new(cap);
+        let mut s = Scrubber::new(cap);
+        let mut at = 0usize;
+        for _ in 0..200 {
+            block(&mut h, &mut s, &mut at, 256, None);
+        }
+        // a quarter beat (6000 frames) ending 1000 frames ago, asked in the block at `at`
+        let len = 6000usize;
+        let end = at as i64 - 1000;
+        let ask = LoopAsk { beats: 0.25, end, fade: 64.0, id: 7 };
+        let f0 = at;
+        let mut out = vec![];
+        for k in 0..60 {
+            let (b, _) = block(&mut h, &mut s, &mut at, 256, (k == 0).then_some(ask));
+            out.extend_from_slice(&b);
+        }
+        assert_eq!(s.loop_id(), Some(7));
+        // past the fade: render frame f plays loop frame (f - end) mod len of [end - len, end)
+        for (k, x) in out.iter().enumerate().skip(64) {
+            let f = (f0 + k) as i64;
+            let src = end - len as i64 + (f - end).rem_euclid(len as i64);
+            assert!((x - src as f32 / 1e6).abs() < 1e-6, "k={k}: {x} vs {src}");
+        }
+    }
+
+    #[test]
+    fn a_loop_ending_inside_the_block_plays_the_live_signal_up_to_its_end() {
+        let cap = capacity_for(8.0, SR);
+        let mut h = History::new(cap);
+        let mut s = Scrubber::new(cap);
+        let mut at = 0usize;
+        for _ in 0..100 {
+            block(&mut h, &mut s, &mut at, 256, None);
+        }
+        let end = at as i64 + 100;
+        let ask = LoopAsk { beats: 0.25, end, fade: 64.0, id: 1 };
+        let (b, live) = block(&mut h, &mut s, &mut at, 256, Some(ask));
+        // up to `end` the loop's tail is the live signal itself
+        for k in 0..100 {
+            assert!((b[k] - live[k]).abs() < 1e-7, "k={k}");
+        }
+        // from `end` it starts over at the loop's first frame
+        let first = (end - 6000) as f32 / 1e6;
+        assert!((b[100] - first).abs() < 1e-6);
+    }
+
+    #[test]
+    fn going_live_from_a_loop_fades_from_the_loop_and_rejoins_exactly() {
+        let cap = capacity_for(8.0, SR);
+        let mut h = History::new(cap);
+        let mut s = Scrubber::new(cap);
+        let mut at = 0usize;
+        for _ in 0..100 {
+            block(&mut h, &mut s, &mut at, 256, None);
+        }
+        let end = at as i64;
+        block(&mut h, &mut s, &mut at, 256, Some(LoopAsk { beats: 0.5, end, fade: 64.0, id: 3 }));
+        for _ in 0..30 {
+            block(&mut h, &mut s, &mut at, 256, None);
+        }
+        // a different id leaves the loop alone
+        assert!(!s.live_if(4, 64.0));
+        assert_eq!(s.mode(), Mode::Loop);
+        let f0 = at as i64;
+        assert!(s.live_if(3, 64.0));
+        let (b, live) = block(&mut h, &mut s, &mut at, 256, None);
+        // the fade is between the loop and live: never a jump to some old head position
+        let len = 12_000i64;
+        for k in 0..64 {
+            let f = f0 + k as i64;
+            let looped = (end - len + (f - end).rem_euclid(len)) as f32 / 1e6;
+            let (lo, hi) = (looped.min(live[k]), looped.max(live[k]));
+            assert!(b[k] >= lo - 1e-6 && b[k] <= hi + 1e-6, "k={k}");
+        }
+        // after it: exactly the live signal, bit for bit
+        assert_eq!(&b[64..], &live[64..]);
+        let (b2, live2) = block(&mut h, &mut s, &mut at, 256, None);
+        assert_eq!(b2, live2);
+    }
+
+    #[test]
+    fn a_long_fade_takes_its_frames() {
+        let cap = capacity_for(8.0, SR);
+        let mut h = History::new(cap);
+        let mut s = Scrubber::new(cap);
+        let mut at = 0usize;
+        for _ in 0..100 {
+            block(&mut h, &mut s, &mut at, 256, None);
+        }
+        let end = at as i64;
+        let (b, live) = block(&mut h, &mut s, &mut at, 256, Some(LoopAsk { beats: 1.0, end, fade: 1024.0, id: 1 }));
+        // a quarter of the way into a 1024-frame fade it is mostly still live
+        let looped = (end - 24_000) as f32 / 1e6 + 255.0 / 1e6;
+        let w = (b[255] - live[255]) / (looped - live[255]);
+        assert!((w - 0.25).abs() < 0.01, "weight {w}");
+    }
+
+    #[test]
+    fn rolls_step_and_find_the_grid() {
+        assert_eq!(step_roll_beats(0.25, 1), 0.5);
+        assert_eq!(step_roll_beats(0.125, -1), 0.125);
+        assert_eq!(step_roll_beats(1.0, 1), 1.0);
+        // beat 10.3 of a 24 000-frame beat: the last quarter beat was at 10.25
+        let back = frames_since_grid(10.3, 0.25, 24_000.0);
+        assert!((back - 1200.0).abs() < 1e-6, "{back}");
+        assert_eq!(frames_since_grid(8.0, 1.0, 24_000.0), 0.0);
+        assert_eq!(frames_since_grid(f64::NAN, 1.0, 24_000.0), 0.0);
     }
 
     #[test]

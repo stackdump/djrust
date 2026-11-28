@@ -44,6 +44,10 @@ pub enum InputMsg {
     Live,
     /// Loop this many beats, ending at the head (or now).
     LoopGrab(f64),
+    /// Loop the history's beats ending at a render frame (a roll, a failsafe loop).
+    LoopAt(crate::history::LoopAsk),
+    /// Back to live over `fade` frames, if loop `id` is still the one playing.
+    LiveIf { id: u32, fade: f32 },
     /// The granular freeze's knobs.
     FreezeSet(crate::fx::granular::FreezeSettings),
     /// Freeze (the last `beats`) or thaw, at render frame `at` (None: now).
@@ -131,6 +135,8 @@ pub struct InputMirror {
     hist_loop_beats: AtomicU32,
     /// Beats of history recorded, up to the window (f32 bits).
     hist_filled_beats: AtomicU32,
+    /// The id of the loop playing now (0: none).
+    hist_loop_id: AtomicU32,
     /// The strip's recording, for capture to loop (set once, when the strip is built with a
     /// history).
     pub tap: std::sync::OnceLock<InputTap>,
@@ -222,6 +228,9 @@ impl InputMirror {
         f32::from_bits(self.hist_filled_beats.load(Ordering::Relaxed))
     }
     /// The freeze: 0 thawed, 1 freezing on the beat, 2 frozen, 3 thawing on the beat.
+    pub fn history_loop_id(&self) -> u32 {
+        self.hist_loop_id.load(Ordering::Relaxed)
+    }
     pub fn freeze_state(&self) -> u8 {
         self.freeze_state.load(Ordering::Relaxed)
     }
@@ -248,6 +257,8 @@ pub(crate) struct Recall {
     freeze: crate::fx::granular::GrainFreeze,
     /// A freeze or a thaw waiting for its frame: (on, beats, at).
     pending: Option<(bool, f64, i64)>,
+    /// A loop waiting for its block.
+    pending_loop: Option<crate::history::LoopAsk>,
 }
 
 pub(crate) struct InputStrip {
@@ -299,6 +310,7 @@ impl InputStrip {
                         * crate::fx::granular::MAX_FREEZE_BEATS) as usize,
                 ),
                 pending: None,
+                pending_loop: None,
             }
         });
         let (rec, rec_rx) = rtrb::RingBuffer::<f32>::new(REC_RING);
@@ -338,6 +350,12 @@ impl InputStrip {
             InputMsg::Strip(k, v) => self.eq.set(k, v),
             m => {
                 let Some(r) = self.recall.as_mut() else { return };
+                if matches!(
+                    m,
+                    InputMsg::Touch | InputMsg::Scrub(_) | InputMsg::Release | InputMsg::Live | InputMsg::LoopGrab(_)
+                ) {
+                    r.pending_loop = None;
+                }
                 match m {
                     InputMsg::Tempo(bpm) => r.bpm = bpm.clamp(20.0, 400.0),
                     InputMsg::HistoryBeats(b) => {
@@ -351,6 +369,13 @@ impl InputStrip {
                     InputMsg::Scrub(f) => r.scrub.scrub(&r.hist, f),
                     InputMsg::Release => r.scrub.release(),
                     InputMsg::Live => r.scrub.live(),
+                    InputMsg::LoopAt(a) => r.pending_loop = Some(a),
+                    InputMsg::LiveIf { id, fade } => {
+                        if r.pending_loop.is_some_and(|a| a.id == id) {
+                            r.pending_loop = None;
+                        }
+                        r.scrub.live_if(id, fade as f64);
+                    }
                     InputMsg::FreezeSet(s) => r.freeze.configure(&s),
                     InputMsg::FreezeScrub(f) => r.freeze.scrub(f),
                     InputMsg::Freeze { on, beats, at } => {
@@ -451,6 +476,10 @@ impl InputStrip {
             if let Some(t) = self.mirror.tap.get() {
                 t.write(&self.l[..n]);
             }
+            if let Some(ask) = rc.pending_loop.filter(|a| a.due(frame, n)) {
+                rc.pending_loop = None;
+                ask.start(&mut rc.scrub, &rc.hist, frame, n, rc.bpm, rc.sample_rate);
+            }
             let win = history::window_frames(rc.beats, rc.bpm, rc.sample_rate, rc.hist.capacity());
             rc.scrub.process(&rc.hist, win, rc.bpm, &mut self.l[..n]);
             let fpb = history::frames_per_beat(rc.bpm, rc.sample_rate);
@@ -494,6 +523,8 @@ impl InputStrip {
             m.hist_lag_beats.store(lag.to_bits(), Ordering::Relaxed);
             let lb = rc.scrub.loop_beats().unwrap_or(0.0) as f32;
             m.hist_loop_beats.store(lb.to_bits(), Ordering::Relaxed);
+            m.hist_loop_id
+                .store(rc.scrub.loop_id().unwrap_or(0), Ordering::Relaxed);
             let held = (rc.hist.written().min(win as u64) as f64 / fpb) as f32;
             m.hist_filled_beats.store(held.to_bits(), Ordering::Relaxed);
         }
@@ -926,13 +957,16 @@ impl Engine {
         }
         ok
     }
-    /// The platter is let go: the history plays on, a delay of where it was left.
+    /// The platter is let go: the history plays on, a delay of where it was left. In slip mode
+    /// ([`Engine::set_history_slip`]) it goes back to live instead: the strip played on
+    /// underneath, and rejoins it.
     pub fn input_release(&mut self, i: impl Into<RecallId>) -> bool {
         let i = i.into();
         if self.is_frozen(i) {
             return true;
         }
-        self.has_history(i) && self.recall_send(i, RecallMsg::Release)
+        let m = if self.history_slip(i) { RecallMsg::Live } else { RecallMsg::Release };
+        self.has_history(i) && self.recall_send(i, m)
     }
     /// Back to the live signal.
     pub fn input_live(&mut self, i: impl Into<RecallId>) -> bool {
