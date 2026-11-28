@@ -22,9 +22,37 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, TryLockError};
+use std::time::{Duration, Instant};
 
 /// Seconds with no callback before a running stream counts as stalled.
 pub const STALL_AFTER: f64 = 1.0;
+/// How many of the last data callbacks keep their start time ([`StreamHealth::callback_start`]):
+/// enough for a host that looks once a frame at 60 Hz with buffers down to 64 frames.
+pub const CALLBACK_RING: usize = 16;
+/// The buffer sizes `audio.buffer_frames` may ask for: powers of two in this range.
+pub const BUFFER_FRAMES_MIN: u32 = 16;
+pub const BUFFER_FRAMES_MAX: u32 = 8192;
+
+/// `frames` as a buffer size to ask a device for, or why not: a power of two from
+/// [`BUFFER_FRAMES_MIN`] to [`BUFFER_FRAMES_MAX`], and inside the device's own range when it
+/// reports one (`supported`: min and max frames). Beyond Swift (`AVAudioEngine` picks its own
+/// IO buffer).
+pub fn check_buffer_frames(frames: u32, supported: Option<(u32, u32)>) -> Result<u32, String> {
+    if !frames.is_power_of_two() || !(BUFFER_FRAMES_MIN..=BUFFER_FRAMES_MAX).contains(&frames) {
+        return Err(format!(
+            "buffer of {frames} frames: a power of two from {BUFFER_FRAMES_MIN} to {BUFFER_FRAMES_MAX}"
+        ));
+    }
+    if let Some((lo, hi)) = supported {
+        if frames < lo || frames > hi {
+            return Err(format!(
+                "buffer of {frames} frames: this device takes {lo} to {hi}"
+            ));
+        }
+    }
+    Ok(frames)
+}
+
 /// Seconds a new stream gets to deliver its first callback (Bluetooth can be slow to start).
 pub const START_GRACE: f64 = 3.0;
 /// The first retry after a loss, seconds; each failed retry doubles it up to [`RETRY_MAX`].
@@ -32,8 +60,16 @@ pub const RETRY_FIRST: f64 = 1.0;
 pub const RETRY_MAX: f64 = 8.0;
 
 /// What a stream's callbacks report. Shared between the stream (any thread) and the host.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct StreamHealth {
+    /// What the callback start times count from.
+    epoch: Instant,
+    /// The start of callback `n` (as [`beats`](Self::beats) counts them, from 1) at `n %
+    /// CALLBACK_RING`, nanoseconds after `epoch` plus one (0: none yet).
+    starts: [AtomicU64; CALLBACK_RING],
+    /// What the device said of the last callback: from its start to its first frame being
+    /// heard, nanoseconds plus one (0: never said).
+    device_latency_ns: AtomicU64,
     beats: AtomicU64,
     faulted: AtomicBool,
     fault: Mutex<Option<String>>,
@@ -53,6 +89,25 @@ pub struct StreamHealth {
     panics: AtomicU64,
 }
 
+impl Default for StreamHealth {
+    fn default() -> Self {
+        StreamHealth {
+            epoch: Instant::now(),
+            starts: Default::default(),
+            device_latency_ns: AtomicU64::new(0),
+            beats: AtomicU64::new(0),
+            faulted: AtomicBool::new(false),
+            fault: Mutex::new(None),
+            notices: AtomicU64::new(0),
+            silent: AtomicU64::new(0),
+            late: AtomicU64::new(0),
+            frames: AtomicU64::new(0),
+            max_gap_us: AtomicU64::new(0),
+            panics: AtomicU64::new(0),
+        }
+    }
+}
+
 impl StreamHealth {
     pub fn new() -> StreamHealth {
         StreamHealth::default()
@@ -61,6 +116,43 @@ impl StreamHealth {
     /// The data callback ran (real-time safe: one relaxed add).
     pub fn beat(&self) {
         self.beats.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The data callback ran, starting at `at`: [`beat`](Self::beat), and its start kept for
+    /// [`callback_start`](Self::callback_start). Real-time safe: relaxed atomics, no allocation.
+    pub fn beat_at(&self, at: Instant) {
+        let n = self.beats.fetch_add(1, Ordering::Relaxed) + 1;
+        let ns = at.saturating_duration_since(self.epoch).as_nanos() as u64;
+        self.starts[n as usize % CALLBACK_RING].store(ns.saturating_add(1), Ordering::Relaxed);
+    }
+
+    /// When callback `n` (1: the stream's first, as [`beats`](Self::beats) counts) started,
+    /// while it is one of the last few kept (None: not yet run, too long ago, or the stream
+    /// counts with [`beat`](Self::beat) alone).
+    pub fn callback_start(&self, n: u64) -> Option<Instant> {
+        let now = self.beats();
+        if n == 0 || n > now || now - n >= CALLBACK_RING as u64 - 1 {
+            return None;
+        }
+        match self.starts[n as usize % CALLBACK_RING].load(Ordering::Relaxed) {
+            0 => None,
+            ns => Some(self.epoch + Duration::from_nanos(ns - 1)),
+        }
+    }
+
+    /// The device's word on the last callback: its first frame is heard `latency` after the
+    /// callback started (cpal's playback minus callback instant). Real-time safe.
+    pub fn device_latency(&self, latency: Duration) {
+        let ns = latency.as_nanos().min(u64::MAX as u128 - 1) as u64;
+        self.device_latency_ns.store(ns + 1, Ordering::Relaxed);
+    }
+
+    /// The last [`device_latency`](Self::device_latency) said (None: the device never said).
+    pub fn device_latency_s(&self) -> Option<f64> {
+        match self.device_latency_ns.load(Ordering::Relaxed) {
+            0 => None,
+            ns => Some((ns - 1) as f64 / 1e9),
+        }
     }
 
     pub fn beats(&self) -> u64 {
@@ -418,6 +510,56 @@ impl EventLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A callback's start is kept for the last few callbacks and found by its number.
+    #[test]
+    fn callback_starts_are_kept_by_number_for_a_while() {
+        let h = StreamHealth::new();
+        assert_eq!(h.callback_start(1), None, "nothing has run");
+        let t0 = Instant::now();
+        let at = |k: u64| t0 + Duration::from_millis(5 * k);
+        for k in 1..=3 {
+            h.beat_at(at(k));
+        }
+        assert_eq!(h.beats(), 3);
+        assert_eq!(h.callback_start(2), Some(at(2)));
+        assert_eq!(h.callback_start(3), Some(at(3)));
+        assert_eq!(h.callback_start(4), None, "not yet run");
+        assert_eq!(h.callback_start(0), None);
+        for k in 4..=40 {
+            h.beat_at(at(k));
+        }
+        assert_eq!(h.callback_start(3), None, "too long ago: overwritten");
+        assert_eq!(h.callback_start(40), Some(at(40)));
+        assert_eq!(h.callback_start(40 - CALLBACK_RING as u64 + 2), Some(at(40 - CALLBACK_RING as u64 + 2)));
+        // a stream counting with beat() alone keeps no times
+        let plain = StreamHealth::new();
+        plain.beat();
+        assert_eq!(plain.callback_start(1), None);
+    }
+
+    #[test]
+    fn device_latency_is_unknown_until_said() {
+        let h = StreamHealth::new();
+        assert_eq!(h.device_latency_s(), None);
+        h.device_latency(Duration::ZERO);
+        assert_eq!(h.device_latency_s(), Some(0.0), "zero is a word, not silence");
+        h.device_latency(Duration::from_micros(7_250));
+        assert!((h.device_latency_s().unwrap() - 0.00725).abs() < 1e-9);
+    }
+
+    #[test]
+    fn buffer_frames_are_powers_of_two_in_range_and_in_the_devices() {
+        assert_eq!(check_buffer_frames(256, None), Ok(256));
+        assert_eq!(check_buffer_frames(16, None), Ok(16));
+        assert_eq!(check_buffer_frames(8192, Some((15, 8192))), Ok(8192));
+        for bad in [0, 1, 8, 100, 255, 16384] {
+            assert!(check_buffer_frames(bad, None).is_err(), "{bad}");
+        }
+        let e = check_buffer_frames(64, Some((128, 4096))).unwrap_err();
+        assert!(e.contains("128 to 4096"), "{e}");
+        assert!(check_buffer_frames(8192, Some((128, 4096))).is_err());
+    }
 
     /// A panic in a render plays silence for that buffer, is counted, and the next buffer
     /// renders again.

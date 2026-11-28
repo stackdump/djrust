@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use crate::host::deck::output::{Interleaver, Routing};
 use crate::host::deck::Renderer;
-use crate::host::device_watch::{try_lock_live, Severity, StreamHealth};
+use crate::host::device_watch::{check_buffer_frames, try_lock_live, Severity, StreamHealth};
 use crate::host::HostError;
 
 /// How a backend error is taken: the device gone or the stream invalidated is fatal (the host
@@ -100,6 +100,8 @@ pub struct Output {
     pub name: String,
     config: StreamConfig,
     format: cpal::SampleFormat,
+    /// The buffer sizes the device's chosen config takes.
+    buffer: cpal::SupportedBufferSize,
 }
 
 impl Output {
@@ -140,8 +142,40 @@ impl Output {
             name: name_of(&device),
             config: supported.config(),
             format: supported.sample_format(),
+            buffer: *supported.buffer_size(),
             device,
         })
+    }
+
+    /// The buffer sizes (min and max frames) the device says it takes, if it says.
+    pub fn buffer_range(&self) -> Option<(u32, u32)> {
+        match self.buffer {
+            cpal::SupportedBufferSize::Range { min, max } => Some((min, max)),
+            cpal::SupportedBufferSize::Unknown => None,
+        }
+    }
+
+    /// Ask the device for buffers of `frames` frames (None: its default), checked by
+    /// [`check_buffer_frames`] against [`buffer_range`](Self::buffer_range). Smaller is less
+    /// latency and more risk of an underrun. Refused, the output keeps the size it had (so a
+    /// host can say why and play at the default).
+    pub fn set_buffer_frames(&mut self, frames: Option<u32>) -> Result<(), HostError> {
+        self.config.buffer_size = match frames {
+            None => cpal::BufferSize::Default,
+            Some(n) => cpal::BufferSize::Fixed(
+                check_buffer_frames(n, self.buffer_range())
+                    .map_err(|e| be(format!("{}: {e}", self.name)))?,
+            ),
+        };
+        Ok(())
+    }
+
+    /// The buffer size asked for (None: the device's default).
+    pub fn buffer_frames(&self) -> Option<u32> {
+        match self.config.buffer_size {
+            cpal::BufferSize::Fixed(n) => Some(n),
+            cpal::BufferSize::Default => None,
+        }
     }
 
     pub fn sample_rate(&self) -> u32 {
@@ -248,9 +282,11 @@ impl Output {
         self.device
             .build_output_stream(
                 self.config,
-                move |data: &mut [T], _| {
-                    beat.beat();
+                move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
                     let now = std::time::Instant::now();
+                    beat.beat_at(now);
+                    let ts = info.timestamp();
+                    beat.device_latency(ts.playback.duration_since(ts.callback));
                     let gap = last.map(|t| now.saturating_duration_since(t).as_secs_f64());
                     last = Some(now);
                     beat.callback(data.len() / channels.max(1), gap, rate);
