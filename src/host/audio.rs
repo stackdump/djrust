@@ -13,6 +13,11 @@
 //! Every stream reports into a [`StreamHealth`] (`crate::host::device_watch`): its data callback
 //! beats, its error callback leaves a fatal error there. The host watches it and rebuilds the
 //! stream when the device goes (a Bluetooth headset dropping out, a USB interface pulled).
+//!
+//! A panic in the render does not take the app down: the output callback renders each buffer
+//! under [`StreamHealth::guard_buffer`], so a panicking buffer plays as silence, is counted
+//! (`render_panics`, and as a silent fill) and the stream goes on. A shared slot a panic
+//! poisoned is still played from ([`try_lock_live`]).
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample, Stream, StreamConfig};
@@ -22,7 +27,7 @@ use std::sync::Arc;
 
 use crate::host::deck::output::{Interleaver, Routing};
 use crate::host::deck::Renderer;
-use crate::host::device_watch::{Severity, StreamHealth};
+use crate::host::device_watch::{try_lock_live, Severity, StreamHealth};
 use crate::host::HostError;
 
 /// How a backend error is taken: the device gone or the stream invalidated is fatal (the host
@@ -250,31 +255,38 @@ impl Output {
                     last = Some(now);
                     beat.callback(data.len() / channels.max(1), gap, rate);
                     let mut silent = false;
-                    let mut at = 0;
-                    while at < data.len() {
-                        let n = (data.len() - at).min(scratch.len());
-                        match &mut renderer {
-                            Source::Owned(r) => {
-                                inter.fill(r, &routing, channels, &mut scratch[..n], ring.as_mut())
-                            }
-                            Source::Shared(slot) => match slot.try_lock() {
-                                Ok(mut g) if g.is_some() => inter.fill(
-                                    g.as_mut().expect("checked"),
-                                    &routing,
-                                    channels,
-                                    &mut scratch[..n],
-                                    ring.as_mut(),
-                                ),
-                                _ => {
-                                    silent = true;
-                                    scratch[..n].fill(0.0)
+                    // a panic in the render plays this buffer as silence and the stream goes on
+                    // (unwinding out of the callback would abort the app): device_watch
+                    let ok = beat.guard_buffer(data, T::from_sample(0.0f32), |data| {
+                        let mut at = 0;
+                        while at < data.len() {
+                            let n = (data.len() - at).min(scratch.len());
+                            match &mut renderer {
+                                Source::Owned(r) => {
+                                    inter.fill(r, &routing, channels, &mut scratch[..n], ring.as_mut())
                                 }
-                            },
+                                Source::Shared(slot) => match try_lock_live(slot) {
+                                    Some(mut g) if g.is_some() => inter.fill(
+                                        g.as_mut().expect("checked"),
+                                        &routing,
+                                        channels,
+                                        &mut scratch[..n],
+                                        ring.as_mut(),
+                                    ),
+                                    _ => {
+                                        silent = true;
+                                        scratch[..n].fill(0.0)
+                                    }
+                                },
+                            }
+                            for (o, s) in data[at..at + n].iter_mut().zip(&scratch[..n]) {
+                                *o = T::from_sample(*s);
+                            }
+                            at += n;
                         }
-                        for (o, s) in data[at..at + n].iter_mut().zip(&scratch[..n]) {
-                            *o = T::from_sample(*s);
-                        }
-                        at += n;
+                    });
+                    if !ok {
+                        silent = true;
                     }
                     if silent {
                         beat.silent_fill();

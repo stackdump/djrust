@@ -21,7 +21,7 @@
 //!   decks still move and the command ring keeps draining).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, TryLockError};
 
 /// Seconds with no callback before a running stream counts as stalled.
 pub const STALL_AFTER: f64 = 1.0;
@@ -49,6 +49,8 @@ pub struct StreamHealth {
     frames: AtomicU64,
     /// The longest gap between two callbacks, microseconds (reset by [`StreamHealth::take_max_gap`]).
     max_gap_us: AtomicU64,
+    /// Buffers whose render panicked: each played silence instead ([`StreamHealth::guard_buffer`]).
+    panics: AtomicU64,
 }
 
 impl StreamHealth {
@@ -127,6 +129,26 @@ impl StreamHealth {
         self.notices() + self.silent_fills() + self.late_callbacks()
     }
 
+    /// Render one buffer, `data`, with `render`, and live through a panic in it: a panic that
+    /// unwound out of a CoreAudio or ALSA callback would abort the process (the whole set gone
+    /// for one bug in a voice). On a panic the buffer is filled with `silence`, the panic is
+    /// counted ([`render_panics`](Self::render_panics)) and false comes back; the stream goes
+    /// on, and the next buffer renders again. Real-time safe while nothing panics (the panic
+    /// hook's message is the only cost, and only on that path).
+    pub fn guard_buffer<T: Copy>(&self, data: &mut [T], silence: T, render: impl FnOnce(&mut [T])) -> bool {
+        let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render(&mut *data))).is_ok();
+        if !ok {
+            data.fill(silence);
+            self.panics.fetch_add(1, Ordering::Relaxed);
+        }
+        ok
+    }
+
+    /// Buffers whose render panicked and played silence instead, since the stream started.
+    pub fn render_panics(&self) -> u64 {
+        self.panics.load(Ordering::Relaxed)
+    }
+
     /// Why the stream faulted, if it did.
     pub fn faulted(&self) -> Option<String> {
         if !self.faulted.load(Ordering::Acquire) {
@@ -139,6 +161,20 @@ impl StreamHealth {
                 .and_then(|g| g.clone())
                 .unwrap_or_else(|| "stream error".to_string()),
         )
+    }
+}
+
+/// `slot.try_lock()` for a real-time thread: never waits (None while someone else holds it),
+/// and takes a slot a panic poisoned as it is, clearing the poison, so one panic in a render
+/// does not leave the stream silent for the rest of the run.
+pub fn try_lock_live<T>(slot: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
+    match slot.try_lock() {
+        Ok(g) => Some(g),
+        Err(TryLockError::WouldBlock) => None,
+        Err(TryLockError::Poisoned(p)) => {
+            slot.clear_poison();
+            Some(p.into_inner())
+        }
     }
 }
 
@@ -382,6 +418,47 @@ impl EventLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A panic in a render plays silence for that buffer, is counted, and the next buffer
+    /// renders again.
+    #[test]
+    fn a_panicking_render_plays_silence_and_the_stream_goes_on() {
+        let h = StreamHealth::new();
+        let mut buf = [0.5f32; 64];
+        let ok = h.guard_buffer(&mut buf, 0.0, |b| {
+            b[..32].fill(1.0); // half a buffer written, then the bug
+            panic!("a voice divided by zero");
+        });
+        assert!(!ok);
+        assert!(buf.iter().all(|s| *s == 0.0), "the whole buffer is silence, not half a render");
+        assert_eq!(h.render_panics(), 1);
+        assert!(h.guard_buffer(&mut buf, 0.0, |b| b.fill(0.25)));
+        assert!(buf.iter().all(|s| *s == 0.25));
+        assert_eq!(h.render_panics(), 1, "a good buffer is not counted");
+        // any sample type the stream writes (i16 here)
+        let mut ints = [7i16; 8];
+        assert!(!h.guard_buffer(&mut ints, 0, |_| panic!("again")));
+        assert_eq!(ints, [0; 8]);
+        assert_eq!(h.render_panics(), 2);
+    }
+
+    /// A slot poisoned by a panic while it was held is still rendered from, and is unpoisoned.
+    #[test]
+    fn a_poisoned_slot_is_still_played() {
+        let slot = std::sync::Arc::new(Mutex::new(Some(3)));
+        let s2 = slot.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = s2.lock().unwrap();
+            panic!("poison it");
+        })
+        .join();
+        assert!(slot.is_poisoned());
+        assert_eq!(*try_lock_live(&slot).expect("taken as it is"), Some(3));
+        assert!(!slot.is_poisoned(), "and the poison cleared for everyone else");
+        let held = slot.lock().unwrap();
+        assert!(try_lock_live(&slot).is_none(), "never waits on a held slot");
+        drop(held);
+    }
 
     fn names(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
